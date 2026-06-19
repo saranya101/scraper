@@ -1,18 +1,30 @@
 import { Router } from "express";
 import { requireAuth } from "../middleware/auth.js";
+import activityRoutes from "./activityRoutes.js";
+import analyticsRoutes from "./analyticsRoutes.js";
+import automationRoutes from "./automationRoutes.js";
 import authRoutes from "./authRoutes.js";
+import competitorRoutes from "./competitorRoutes.js";
 import importRoutes from "./importRoutes.js";
 import leadRoutes from "./leadRoutes.js";
 import noteRoutes from "./noteRoutes.js";
+import outreachRoutes from "./outreachRoutes.js";
 import scannerRoutes from "./scannerRoutes.js";
+import workspaceRoutes from "./workspaceRoutes.js";
 
 const router = Router();
 
 router.get("/health", (_req, res) => res.json({ ok: true }));
 router.use("/auth", authRoutes);
+router.use("/activity", requireAuth, activityRoutes);
+router.use("/analytics", requireAuth, analyticsRoutes);
+router.use("/automation", requireAuth, automationRoutes);
+router.use("/competitors", requireAuth, competitorRoutes);
 router.use("/leads", requireAuth, leadRoutes);
 router.use("/notes", requireAuth, noteRoutes);
+router.use("/outreach", requireAuth, outreachRoutes);
 router.use("/scanner", requireAuth, scannerRoutes);
 router.use("/imports", requireAuth, importRoutes);
+router.use("/workspaces", requireAuth, workspaceRoutes);
 
 export default router;

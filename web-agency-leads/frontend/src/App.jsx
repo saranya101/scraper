@@ -1,11 +1,17 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { useAuth } from "./hooks/useAuth.jsx";
 import AppLayout from "./layouts/AppLayout.jsx";
+import AnalyticsPage from "./pages/AnalyticsPage.jsx";
+import AutomationPage from "./pages/AutomationPage.jsx";
+import CrmPage from "./pages/CrmPage.jsx";
 import DashboardPage from "./pages/DashboardPage.jsx";
 import ImportPage from "./pages/ImportPage.jsx";
 import LeadDetailPage from "./pages/LeadDetailPage.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
+import OutreachPage from "./pages/OutreachPage.jsx";
 import ScannerPage from "./pages/ScannerPage.jsx";
+import WorkspaceDetailPage from "./pages/WorkspaceDetailPage.jsx";
+import WorkspacesPage from "./pages/WorkspacesPage.jsx";
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -27,7 +33,13 @@ export default function App() {
         }
       >
         <Route index element={<DashboardPage />} />
+        <Route path="crm" element={<CrmPage />} />
+        <Route path="analytics" element={<AnalyticsPage />} />
+        <Route path="automation" element={<AutomationPage />} />
+        <Route path="outreach" element={<OutreachPage />} />
         <Route path="scanner" element={<ScannerPage />} />
+        <Route path="workspaces" element={<WorkspacesPage />} />
+        <Route path="workspaces/:industrySlug" element={<WorkspaceDetailPage />} />
         <Route path="leads/:id" element={<LeadDetailPage />} />
         <Route path="imports" element={<ImportPage />} />
       </Route>

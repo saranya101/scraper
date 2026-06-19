@@ -27,7 +27,7 @@ const emptyLead = {
   recommendedFixes: ""
 };
 
-export default function LeadFormModal({ lead, onClose, onSave }) {
+export default function LeadFormModal({ lead, defaultValues = {}, onClose, onSave }) {
   const [form, setForm] = useState(emptyLead);
   const [saving, setSaving] = useState(false);
 
@@ -40,9 +40,9 @@ export default function LeadFormModal({ lead, onClose, onSave }) {
         recommendedFixes: Array.isArray(lead.recommendedFixes) ? lead.recommendedFixes.join("\n") : ""
       });
     } else {
-      setForm(emptyLead);
+      setForm({ ...emptyLead, ...defaultValues });
     }
-  }, [lead]);
+  }, [lead, JSON.stringify(defaultValues)]);
 
   async function submit(event) {
     event.preventDefault();

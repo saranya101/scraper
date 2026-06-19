@@ -12,6 +12,19 @@ export const statuses = {
   ARCHIVED: { label: "Archived", className: "bg-neutral-100 text-neutral-500 ring-neutral-200" }
 };
 
+export const pipelineStages = {
+  NOT_CONTACTED: { label: "Not Contacted", className: "bg-slate-100 text-slate-700 ring-slate-200" },
+  DRAFTED: { label: "Drafted", className: "bg-violet-50 text-violet-700 ring-violet-200" },
+  SENT: { label: "Sent", className: "bg-indigo-50 text-indigo-700 ring-indigo-200" },
+  REPLIED: { label: "Replied", className: "bg-emerald-50 text-emerald-700 ring-emerald-200" },
+  MEETING: { label: "Meeting", className: "bg-cyan-50 text-cyan-700 ring-cyan-200" },
+  PROPOSAL: { label: "Proposal", className: "bg-amber-50 text-amber-700 ring-amber-200" },
+  WON: { label: "Won", className: "bg-green-50 text-green-700 ring-green-200" },
+  LOST: { label: "Lost", className: "bg-rose-50 text-rose-700 ring-rose-200" }
+};
+
+export const pipelineStageOrder = ["NOT_CONTACTED", "DRAFTED", "SENT", "REPLIED", "MEETING", "PROPOSAL", "WON", "LOST"];
+
 export const websiteStatuses = {
   WORKING: { label: "Working", className: "bg-emerald-50 text-emerald-700 ring-emerald-200" },
   CLOUDFLARE: { label: "Cloudflare", className: "bg-orange-50 text-orange-700 ring-orange-200" },

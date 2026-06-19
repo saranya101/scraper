@@ -25,3 +25,23 @@ export function normalizeWebsite(website) {
     return website.trim().replace(/\/$/, "").toLowerCase();
   }
 }
+
+export function normalizeWebsiteRoot(website) {
+  if (!website) return "";
+  try {
+    const withProtocol = /^https?:\/\//i.test(website) ? website : `https://${website}`;
+    const url = new URL(withProtocol.trim());
+    return url.origin.toLowerCase();
+  } catch {
+    return normalizeWebsite(website);
+  }
+}
+
+export function websiteDomainKey(website) {
+  if (!website) return "";
+  try {
+    return new URL(normalizeWebsiteRoot(website)).hostname.replace(/^www\./, "");
+  } catch {
+    return normalizeWebsiteRoot(website);
+  }
+}

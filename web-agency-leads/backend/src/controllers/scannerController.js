@@ -21,7 +21,7 @@ export async function importSelected(req, res) {
 }
 
 export async function templates(req, res) {
-  res.json(await scannerService.listTemplates(req.user.id));
+  res.json(await scannerService.listTemplates(req.user.id, req.query));
 }
 
 export async function createTemplate(req, res) {

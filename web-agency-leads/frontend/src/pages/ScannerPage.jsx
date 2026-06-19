@@ -1,12 +1,14 @@
 import { motion } from "framer-motion";
 import { AlertTriangle, CheckCircle2, CopyPlus, History, Play, RefreshCw, Save, Search, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Badge } from "../components/ui/Badge.jsx";
 import { Button } from "../components/ui/Button.jsx";
 import { Input, Select } from "../components/ui/Input.jsx";
 import { useToast } from "../hooks/useToast.jsx";
 import { api } from "../services/api.js";
 import { domain, formatDate, priorities, websiteStatuses } from "../utils/format.js";
+import { workspaceLabel } from "../utils/workspaces.js";
 
 const initialForm = {
   keyword: "aesthetic clinic",
@@ -28,7 +30,15 @@ const initialForm = {
 
 export default function ScannerPage() {
   const { push } = useToast();
-  const [form, setForm] = useState(initialForm);
+  const [searchParams] = useSearchParams();
+  const industrySlug = searchParams.get("industry") || "";
+  const industryName = searchParams.get("name") || workspaceLabel(industrySlug, "");
+  const templateId = searchParams.get("templateId") || "";
+  const [form, setForm] = useState(() => ({
+    ...initialForm,
+    ...(industryName ? { keyword: industryName } : {}),
+    industrySlug
+  }));
   const [history, setHistory] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [activeJob, setActiveJob] = useState(null);
@@ -47,7 +57,7 @@ export default function ScannerPage() {
   }
 
   async function loadTemplates() {
-    const { data } = await api.get("/scanner/templates");
+    const { data } = await api.get("/scanner/templates", { params: industrySlug ? { industrySlug } : {} });
     setTemplates(data);
   }
 
@@ -61,7 +71,22 @@ export default function ScannerPage() {
   useEffect(() => {
     loadHistory().catch(() => {});
     loadTemplates().catch(() => {});
-  }, []);
+  }, [industrySlug]);
+
+  useEffect(() => {
+    if (templateId) return;
+    setForm((current) => ({
+      ...current,
+      ...(industryName ? { keyword: industryName } : {}),
+      industrySlug
+    }));
+  }, [industrySlug, industryName, templateId]);
+
+  useEffect(() => {
+    if (!templateId || !templates.length) return;
+    const template = templates.find((item) => item.id === templateId);
+    if (template) setForm({ ...initialForm, ...form, ...template, ...(template.filters || {}), industrySlug });
+  }, [templateId, templates.length]);
 
   useEffect(() => {
     loadResults().catch(() => {});
@@ -97,6 +122,7 @@ export default function ScannerPage() {
         minReviews: form.minReviews === "" ? undefined : Number(form.minReviews),
         hasWebsiteOnly: form.hasWebsiteOnly,
         filters: {
+          industrySlug,
           includeKeywords: form.includeKeywords,
           excludeKeywords: form.excludeKeywords,
           minimumScore: form.minimumScore ? Number(form.minimumScore) : undefined,
@@ -126,6 +152,8 @@ export default function ScannerPage() {
       city: form.city,
       maxResults: Number(form.maxResults),
       filters: form
+        ? { ...form, industrySlug }
+        : { industrySlug }
     });
     push("Template saved");
     loadTemplates();
@@ -176,7 +204,9 @@ export default function ScannerPage() {
         <div>
           <p className="text-sm font-semibold uppercase tracking-[0.22em] text-slate-400">Lead intelligence</p>
           <h1 className="mt-2 text-3xl font-semibold tracking-tight md:text-4xl">Scanner dashboard</h1>
-          <p className="mt-2 max-w-2xl text-slate-500">Google Places discovery, Playwright screenshots, OpenAI audits, and filtered imports into your lead pipeline.</p>
+          <p className="mt-2 max-w-2xl text-slate-500">
+            {industrySlug ? `Running inside the ${industryName} workspace. Results will keep this industry assignment.` : "Google Places discovery, Playwright screenshots, OpenAI audits, and filtered imports into your lead pipeline."}
+          </p>
         </div>
         <Button onClick={importSelected} disabled={!selected.length}><CopyPlus size={16} /> Import selected ({selected.length})</Button>
       </div>

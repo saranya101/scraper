@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { normalizeWebsite } from "../utils/priority.js";
+import { normalizeWebsiteRoot } from "../utils/priority.js";
 import { extractPageData } from "./extractionService.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -59,7 +59,7 @@ export async function scanWebsite(browser, business, scanJobId, scanDepth = "QUI
     };
   }
 
-  const website = normalizeWebsite(business.website);
+  const website = normalizeWebsiteRoot(business.website);
   const desktopFile = path.join(screenshotDir, `${scanJobId}-${Date.now()}-desktop.jpg`);
   const mobileFile = desktopFile.replace("-desktop.jpg", "-mobile.jpg");
   let page;

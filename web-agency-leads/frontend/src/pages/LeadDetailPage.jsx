@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowUpRight, Clipboard, Mail, MapPin, Pencil, Phone, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, Clipboard, GitCompare, Mail, MailPlus, MapPin, Pencil, Phone, Plus, Search, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import LeadFormModal from "../components/LeadFormModal.jsx";
@@ -7,7 +7,7 @@ import { Button } from "../components/ui/Button.jsx";
 import { Select, Textarea } from "../components/ui/Input.jsx";
 import { useToast } from "../hooks/useToast.jsx";
 import { api } from "../services/api.js";
-import { domain, formatDate, priorities, statuses, websiteStatuses } from "../utils/format.js";
+import { domain, formatDate, pipelineStages, priorities, statuses, websiteStatuses } from "../utils/format.js";
 
 export default function LeadDetailPage() {
   const { id } = useParams();
@@ -16,6 +16,10 @@ export default function LeadDetailPage() {
   const [lead, setLead] = useState(null);
   const [loading, setLoading] = useState(true);
   const [note, setNote] = useState("");
+  const [drafts, setDrafts] = useState([]);
+  const [competitorData, setCompetitorData] = useState({ competitors: [], salesAngle: "", leadScore: null });
+  const [generatingDraft, setGeneratingDraft] = useState(false);
+  const [competitorLoading, setCompetitorLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
 
   async function loadLead() {
@@ -31,8 +35,23 @@ export default function LeadDetailPage() {
     }
   }
 
+  async function loadDrafts() {
+    const { data } = await api.get(`/outreach/${id}`);
+    setDrafts(data);
+  }
+
+  async function loadCompetitors() {
+    const { data } = await api.get(`/competitors/${id}`);
+    setCompetitorData(data);
+  }
+
   useEffect(() => {
     loadLead();
+  }, [id]);
+
+  useEffect(() => {
+    loadDrafts().catch(() => {});
+    loadCompetitors().catch(() => {});
   }, [id]);
 
   async function updateStatus(status) {
@@ -59,6 +78,58 @@ export default function LeadDetailPage() {
   async function copyOutreach() {
     await navigator.clipboard.writeText(lead.outreachEmail || "");
     push("Outreach copied");
+  }
+
+  async function generateOutreach() {
+    setGeneratingDraft(true);
+    try {
+      const { data } = await api.post(`/outreach/generate/${id}`, { type: "EMAIL", tone: "consultative" });
+      await navigator.clipboard.writeText(data.fullMessage || "");
+      push("Outreach generated and copied");
+      await Promise.all([loadLead(), loadDrafts()]);
+    } catch (error) {
+      push(error.response?.data?.message || "Could not generate outreach", "error");
+    } finally {
+      setGeneratingDraft(false);
+    }
+  }
+
+  async function copyDraft(draft) {
+    await navigator.clipboard.writeText(draft.fullMessage || "");
+    await api.put(`/outreach/${draft.id}`, { status: "COPIED" });
+    push("Draft copied");
+    loadDrafts();
+  }
+
+  async function findCompetitors() {
+    setCompetitorLoading(true);
+    try {
+      const { data } = await api.post(`/competitors/find/${id}`);
+      setCompetitorData(data);
+      push("Competitors found");
+    } catch (error) {
+      push(error.response?.data?.message || "Could not find competitors", "error");
+    } finally {
+      setCompetitorLoading(false);
+    }
+  }
+
+  async function auditCompetitors() {
+    setCompetitorLoading(true);
+    try {
+      const { data } = await api.post(`/competitors/audit/${id}`);
+      setCompetitorData(data);
+      push("Competitor audit saved");
+    } catch (error) {
+      push(error.response?.data?.message || "Could not audit competitors", "error");
+    } finally {
+      setCompetitorLoading(false);
+    }
+  }
+
+  async function copySalesAngle() {
+    await navigator.clipboard.writeText(competitorData.salesAngle || "");
+    push("Sales angle copied");
   }
 
   async function removeLead() {
@@ -203,11 +274,87 @@ export default function LeadDetailPage() {
           </div>
 
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <h2 className="flex items-center gap-2 text-lg font-semibold"><GitCompare size={18} /> Competitor comparison</h2>
+                <p className="mt-1 text-sm text-slate-500">Find local competitors, compare website scores, and use the sales angle in outreach.</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="secondary" onClick={findCompetitors} disabled={competitorLoading}><Search size={16} /> Find</Button>
+                <Button variant="secondary" onClick={auditCompetitors} disabled={competitorLoading || !competitorData.competitors.length}><GitCompare size={16} /> Audit</Button>
+                <Button onClick={copySalesAngle} disabled={!competitorData.salesAngle}><Clipboard size={16} /> Copy angle</Button>
+              </div>
+            </div>
+
+            <div className="mb-5 rounded-2xl bg-slate-950 p-5 text-slate-100">
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">AI sales angle</p>
+              <p className="mt-3 text-sm leading-6">{competitorData.salesAngle || "Run competitor discovery to generate a comparison-based pitch."}</p>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-4">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm font-semibold">{lead.company}</p>
+                <p className="mt-2 text-3xl font-semibold">{lead.score}<span className="text-base text-slate-400">/10</span></p>
+                <p className="mt-1 text-xs text-slate-500">Lead website score</p>
+              </div>
+              {competitorData.competitors.map((competitor) => (
+                <div key={competitor.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                  <div className="aspect-[16/10] bg-slate-100">
+                    {competitor.screenshotPath ? (
+                      <img src={competitor.screenshotPath} alt={`${competitor.company} website screenshot`} className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="grid h-full place-items-center px-4 text-center text-xs text-slate-400">Audit to capture screenshot</div>
+                    )}
+                  </div>
+                  <div className="p-4">
+                    <a href={competitor.website} target="_blank" rel="noreferrer" className="block truncate text-sm font-semibold hover:underline">{competitor.company}</a>
+                    <p className="mt-2 text-3xl font-semibold">{competitor.score}<span className="text-base text-slate-400">/10</span></p>
+                    <div className="mt-3 space-y-2 text-xs text-slate-600">
+                      {(Array.isArray(competitor.strengths) ? competitor.strengths : []).slice(0, 2).map((item) => <p key={item} className="rounded-lg bg-emerald-50 px-2 py-1 text-emerald-800">{item}</p>)}
+                      {(Array.isArray(competitor.weaknesses) ? competitor.weaknesses : []).slice(0, 1).map((item) => <p key={item} className="rounded-lg bg-amber-50 px-2 py-1 text-amber-800">{item}</p>)}
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {!competitorData.competitors.length && (
+                <div className="rounded-2xl border border-dashed border-slate-300 p-6 text-sm text-slate-500 md:col-span-3">
+                  No competitors saved yet. Use Find to pull three local competitors from Google Places.
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-semibold">Outreach email</h2>
-              <Button variant="secondary" onClick={copyOutreach} disabled={!lead.outreachEmail}><Clipboard size={16} /> Copy</Button>
+              <div className="flex gap-2">
+                <Button variant="secondary" onClick={generateOutreach} disabled={generatingDraft}><MailPlus size={16} /> {generatingDraft ? "Generating..." : "Generate"}</Button>
+                <Button variant="secondary" onClick={copyOutreach} disabled={!lead.outreachEmail}><Clipboard size={16} /> Copy</Button>
+              </div>
             </div>
             <pre className="whitespace-pre-wrap rounded-2xl bg-slate-950 p-5 text-sm leading-6 text-slate-100">{lead.outreachEmail || "No outreach copy saved yet."}</pre>
+          </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Saved outreach drafts</h2>
+              <Link to="/outreach" className="text-sm font-semibold text-slate-500 hover:text-slate-950">Open outreach</Link>
+            </div>
+            <div className="space-y-3">
+              {drafts.map((draft) => (
+                <div key={draft.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="mb-2 flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-semibold">{draft.type.replaceAll("_", " ")}</p>
+                      <p className="text-xs text-slate-400">{draft.status} · {formatDate(draft.updatedAt)}</p>
+                    </div>
+                    <Button variant="ghost" className="px-2.5" onClick={() => copyDraft(draft)}><Clipboard size={15} /></Button>
+                  </div>
+                  <p className="line-clamp-3 text-sm leading-6 text-slate-600">{draft.fullMessage}</p>
+                </div>
+              ))}
+              {!drafts.length && <p className="text-sm text-slate-500">No saved drafts yet.</p>}
+            </div>
           </div>
         </section>
 
@@ -256,7 +403,9 @@ export default function LeadDetailPage() {
             <div className="space-y-4">
               {lead.statusHistory.map((item) => (
                 <div key={item.id} className="border-l-2 border-slate-200 pl-4">
-                  <p className="text-sm font-medium">{statuses[item.oldStatus]?.label || "Created"} to {statuses[item.newStatus]?.label}</p>
+                  <p className="text-sm font-medium">
+                    {pipelineStages[item.oldStage]?.label || statuses[item.oldStatus]?.label || "Created"} to {pipelineStages[item.newStage]?.label || statuses[item.newStatus]?.label}
+                  </p>
                   <p className="text-xs text-slate-400">{item.user.name} · {formatDate(item.createdAt)}</p>
                 </div>
               ))}

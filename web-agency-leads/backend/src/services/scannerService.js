@@ -3,7 +3,7 @@ import OpenAI from "openai";
 import pLimit from "p-limit";
 import { prisma } from "../repositories/prisma.js";
 import { HttpError, notFound } from "../utils/httpError.js";
-import { normalizeWebsite, priorityFromAudit } from "../utils/priority.js";
+import { normalizeWebsiteRoot, priorityFromAudit, websiteDomainKey } from "../utils/priority.js";
 import { enqueue } from "./queueService.js";
 import { searchGooglePlaces } from "./placesService.js";
 import { absoluteUploadPath, createBrowser, scanWebsite } from "./websiteScannerService.js";
@@ -22,15 +22,6 @@ const defaultAudit = {
   recommendedFixes: ["Review the screenshots and website manually, then rerun the scan later."],
   outreachEmail: ""
 };
-
-function domainKey(website) {
-  if (!website) return "";
-  try {
-    return new URL(normalizeWebsite(website)).hostname.replace(/^www\./, "");
-  } catch {
-    return normalizeWebsite(website);
-  }
-}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -145,12 +136,12 @@ function passesFilters(result, filters = {}) {
 }
 
 async function createLeadFromScanResultData(resultData) {
-  const website = normalizeWebsite(resultData.website);
+  const website = normalizeWebsiteRoot(resultData.website);
   if (!website) return { imported: false, duplicate: false };
 
-  const domain = domainKey(website);
+  const domain = websiteDomainKey(website);
   const possible = await prisma.lead.findMany({ select: { id: true, website: true } });
-  const existing = possible.find((lead) => domainKey(lead.website) === domain);
+  const existing = possible.find((lead) => websiteDomainKey(lead.website) === domain);
   if (existing) {
     await serviceOpportunityService.generateForLead(existing.id);
     return { imported: false, duplicate: true };
@@ -200,7 +191,7 @@ function resultDataFromScan({ job, business, capture, audit, duplicate }) {
   return {
     scanJobId: job.id,
     company: business.company,
-    website: capture.website || normalizeWebsite(business.website),
+    website: capture.website || normalizeWebsiteRoot(business.website),
     phone: business.phone,
     address: business.address,
     industry: business.industry,
@@ -240,7 +231,7 @@ async function saveResultAndLead(resultData, existingWebsites) {
     where: { id: saved.id },
     data: { imported: leadImport.imported, duplicate: leadImport.duplicate || resultData.duplicate }
   });
-  if (leadImport.imported && resultData.website) existingWebsites?.add(domainKey(resultData.website));
+  if (leadImport.imported && resultData.website) existingWebsites?.add(websiteDomainKey(resultData.website));
   return saved;
 }
 
@@ -256,7 +247,7 @@ async function processScan(job, input) {
     const browser = await createBrowser();
     try {
       const existing = await prisma.lead.findMany({ select: { website: true } });
-      const existingWebsites = new Set(existing.map((lead) => domainKey(lead.website)));
+      const existingWebsites = new Set(existing.map((lead) => websiteDomainKey(lead.website)));
       const limit = pLimit(Number(process.env.SCANNER_CONCURRENCY || 1));
       let complete = 0;
 
@@ -265,8 +256,8 @@ async function processScan(job, input) {
           limit(async () => {
             await addLog(job.id, `Checking ${business.company}.`);
             try {
-              const website = normalizeWebsite(business.website);
-              const businessDomain = domainKey(website);
+              const website = normalizeWebsiteRoot(business.website);
+              const businessDomain = websiteDomainKey(website);
               if (businessDomain && existingWebsites.has(businessDomain)) {
                 await addLog(job.id, `Skipped duplicate domain for ${business.company}.`);
                 complete += 1;
@@ -397,7 +388,7 @@ export async function importResults(scanResultIds, userId) {
   let skipped = 0;
 
   for (const result of results) {
-    const website = normalizeWebsite(result.website);
+    const website = normalizeWebsiteRoot(result.website);
     if (!website) {
       skipped += 1;
       continue;
@@ -453,8 +444,13 @@ export async function importResults(scanResultIds, userId) {
   return { imported, skipped };
 }
 
-export async function listTemplates(userId) {
-  return prisma.scanTemplate.findMany({ where: { createdBy: userId }, orderBy: { createdAt: "desc" } });
+export async function listTemplates(userId, query = {}) {
+  const templates = await prisma.scanTemplate.findMany({ where: { createdBy: userId }, orderBy: { createdAt: "desc" } });
+  if (!query.industrySlug) return templates;
+  return templates.filter((template) => {
+    const filters = template.filters && typeof template.filters === "object" ? template.filters : {};
+    return filters.industrySlug === query.industrySlug || String(template.keyword || "").toLowerCase().includes(String(query.industrySlug).replaceAll("-", " "));
+  });
 }
 
 export async function createTemplate(input, userId) {

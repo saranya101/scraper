@@ -16,10 +16,22 @@ const statLabels = [
   ["warm", "WARM leads"],
   ["cold", "COLD leads"],
   ["contacted", "Contacted"],
-  ["replied", "Replied"]
+  ["replied", "Replied"],
+  ["remindersDue", "Reminders due"]
 ];
 
-export default function DashboardPage() {
+const baseFilters = { search: "", priority: "", status: "", websiteStatus: "", industry: "", recommendedServiceId: "", minServiceScore: "", minScore: "", maxScore: "", hasScreenshot: "", hasPhone: "", sortBy: "createdAt", sortOrder: "desc", page: 1 };
+
+function readSavedWorkspaceFilters(slug) {
+  try {
+    const saved = localStorage.getItem(`workspace_filters_${slug}`);
+    return saved ? JSON.parse(saved) : {};
+  } catch {
+    return {};
+  }
+}
+
+export default function DashboardPage({ workspaceSlug = "", workspaceIndustryName = "", embedded = false }) {
   const { push } = useToast();
   const [leads, setLeads] = useState([]);
   const [stats, setStats] = useState({});
@@ -29,9 +41,25 @@ export default function DashboardPage() {
   const [modalLead, setModalLead] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [catalog, setCatalog] = useState({ industries: [], services: [] });
-  const [filters, setFilters] = useState({ search: "", priority: "", status: "", websiteStatus: "", industry: "", recommendedServiceId: "", minServiceScore: "", minScore: "", maxScore: "", hasScreenshot: "", hasPhone: "", sortBy: "createdAt", sortOrder: "desc", page: 1 });
+  const [filters, setFilters] = useState(() => {
+    if (!workspaceSlug) return baseFilters;
+    return { ...baseFilters, ...readSavedWorkspaceFilters(workspaceSlug), industry: "" };
+  });
 
-  const params = useMemo(() => Object.fromEntries(Object.entries(filters).filter(([, value]) => value)), [filters]);
+  const params = useMemo(() => {
+    const clean = Object.fromEntries(Object.entries(filters).filter(([, value]) => value));
+    return workspaceSlug ? { ...clean, industrySlug: workspaceSlug } : clean;
+  }, [filters, workspaceSlug]);
+
+  useEffect(() => {
+    if (!workspaceSlug) return;
+    setFilters({ ...baseFilters, ...readSavedWorkspaceFilters(workspaceSlug), industry: "" });
+  }, [workspaceSlug]);
+
+  useEffect(() => {
+    if (!workspaceSlug) return;
+    localStorage.setItem(`workspace_filters_${workspaceSlug}`, JSON.stringify({ ...filters, industry: "" }));
+  }, [workspaceSlug, JSON.stringify(filters)]);
 
   async function loadLeads() {
     setLoading(true);
@@ -57,11 +85,12 @@ export default function DashboardPage() {
   }, []);
 
   async function saveLead(payload) {
+    const data = !modalLead && workspaceIndustryName ? { ...payload, industry: payload.industry || workspaceIndustryName } : payload;
     if (modalLead) {
-      await api.put(`/leads/${modalLead.id}`, payload);
+      await api.put(`/leads/${modalLead.id}`, data);
       push("Lead updated");
     } else {
-      await api.post("/leads", payload);
+      await api.post("/leads", data);
       push("Lead created");
     }
     await loadLeads();
@@ -92,16 +121,28 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-        <div>
-          <p className="text-sm font-semibold uppercase tracking-[0.22em] text-slate-400">Redesign pipeline</p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight md:text-4xl">Lead dashboard</h1>
-          <p className="mt-2 max-w-2xl text-slate-500">Discover weak websites, score opportunity, and move the best prospects through outreach.</p>
+      {!embedded && (
+        <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-[0.22em] text-slate-400">Redesign pipeline</p>
+            <h1 className="mt-2 text-3xl font-semibold tracking-tight md:text-4xl">Lead dashboard</h1>
+            <p className="mt-2 max-w-2xl text-slate-500">Discover weak websites, score opportunity, and move the best prospects through outreach.</p>
+          </div>
+          <Button onClick={openCreate}><Plus size={16} /> New lead</Button>
         </div>
-        <Button onClick={openCreate}><Plus size={16} /> New lead</Button>
-      </div>
+      )}
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+      {embedded && (
+        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-[0.22em] text-slate-400">Workspace leads</p>
+            <h2 className="mt-2 text-2xl font-semibold tracking-tight">{workspaceIndustryName || "Industry"} pipeline</h2>
+          </div>
+          <Button onClick={openCreate}><Plus size={16} /> New lead</Button>
+        </div>
+      )}
+
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-7">
         {statLabels.map(([key, label]) => (
           <div key={key} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</p>
@@ -149,10 +190,14 @@ export default function DashboardPage() {
           </div>
         </div>
         <div className="mt-3 grid gap-3 md:grid-cols-4">
-          <Select value={filters.industry} onChange={(event) => setFilters({ ...filters, industry: event.target.value, page: 1 })}>
-            <option value="">All industries</option>
-            {catalog.industries.map((industry) => <option key={industry.id} value={industry.name}>{industry.name}</option>)}
-          </Select>
+          {!workspaceSlug ? (
+            <Select value={filters.industry} onChange={(event) => setFilters({ ...filters, industry: event.target.value, page: 1 })}>
+              <option value="">All industries</option>
+              {catalog.industries.map((industry) => <option key={industry.id} value={industry.name}>{industry.name}</option>)}
+            </Select>
+          ) : (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-600">{workspaceIndustryName || "Industry locked"}</div>
+          )}
           <Select value={filters.recommendedServiceId} onChange={(event) => setFilters({ ...filters, recommendedServiceId: event.target.value, page: 1 })}>
             <option value="">Recommended service</option>
             {catalog.services.map((service) => <option key={service.id} value={service.id}>{service.name}</option>)}
@@ -197,7 +242,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {modalOpen && <LeadFormModal lead={modalLead} onClose={() => setModalOpen(false)} onSave={saveLead} />}
+      {modalOpen && <LeadFormModal lead={modalLead} defaultValues={workspaceIndustryName ? { industry: workspaceIndustryName } : {}} onClose={() => setModalOpen(false)} onSave={saveLead} />}
     </div>
   );
 }

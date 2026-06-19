@@ -1,15 +1,6 @@
 import axios from "axios";
 import { HttpError } from "../utils/httpError.js";
-import { normalizeWebsite } from "../utils/priority.js";
-
-function domainKey(website) {
-  if (!website) return "";
-  try {
-    return new URL(normalizeWebsite(website)).hostname.replace(/^www\./, "");
-  } catch {
-    return normalizeWebsite(website);
-  }
-}
+import { normalizeWebsiteRoot, websiteDomainKey } from "../utils/priority.js";
 
 function compactLocation({ country, state, city, location }) {
   return [city, state, country].filter(Boolean).join(", ") || location;
@@ -19,7 +10,7 @@ function placeToBusiness(place, input) {
   const location = compactLocation(input);
   return {
     company: place.displayName?.text || place.name || "Unnamed business",
-    website: place.websiteUri || null,
+    website: normalizeWebsiteRoot(place.websiteUri) || null,
     phone: place.nationalPhoneNumber || place.internationalPhoneNumber || null,
     address: place.formattedAddress || null,
     industry: input.keyword,
@@ -90,7 +81,7 @@ export async function searchGooglePlaces(input) {
       if (hasWebsiteOnly && !business.website) continue;
       if (business.googleReviewCount < minReviews) continue;
 
-      const key = domainKey(business.website) || `${business.company}-${business.address}`.toLowerCase();
+      const key = websiteDomainKey(business.website) || `${business.company}-${business.address}`.toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
       businesses.push(business);

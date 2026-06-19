@@ -1,12 +1,18 @@
-import { BarChart3, DatabaseZap, LogOut, Menu, Radar, Search, Sparkles, UsersRound, X } from "lucide-react";
+import { BarChart3, ChartNoAxesCombined, Clock3, DatabaseZap, KanbanSquare, Layers3, LogOut, MailPlus, Menu, Radar, Search, Sparkles, UsersRound, X } from "lucide-react";
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { Button } from "../components/ui/Button.jsx";
 import { useAuth } from "../hooks/useAuth.jsx";
 import { initials } from "../utils/format.js";
+import { workspaceNav } from "../utils/workspaces.js";
 
 const navItems = [
-  { to: "/", label: "Leads", icon: BarChart3 },
+  { to: "/", label: "All Leads", icon: BarChart3 },
+  { to: "/crm", label: "CRM Pipeline", icon: KanbanSquare },
+  { to: "/outreach", label: "Outreach", icon: MailPlus },
+  { to: "/analytics", label: "Analytics", icon: ChartNoAxesCombined },
+  { to: "/automation", label: "Automation", icon: Clock3 },
+  { to: "/workspaces", label: "Workspaces", icon: Layers3 },
   { to: "/scanner", label: "Scanner", icon: Radar },
   { to: "/imports", label: "Imports", icon: DatabaseZap }
 ];
@@ -22,8 +28,8 @@ export default function AppLayout() {
   }
 
   const sidebar = (
-    <aside className="flex h-full flex-col bg-[#080b12] p-4 text-white">
-      <div className="flex items-center gap-3 px-2 py-3">
+    <aside className="flex h-full min-h-0 flex-col bg-[#080b12] p-4 text-white">
+      <div className="flex shrink-0 items-center gap-3 px-2 py-3">
         <div className="grid h-10 w-10 place-items-center rounded-xl bg-white text-slate-950 shadow-glow">
           <Sparkles size={19} />
         </div>
@@ -32,24 +38,45 @@ export default function AppLayout() {
           <p className="text-xs text-slate-400">Private redesign CRM</p>
         </div>
       </div>
-      <nav className="mt-8 space-y-1">
-        {navItems.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            onClick={() => setOpen(false)}
-            className={({ isActive }) =>
-              `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
-                isActive ? "bg-white text-slate-950" : "text-slate-400 hover:bg-white/10 hover:text-white"
-              }`
-            }
-          >
-            <item.icon size={17} />
-            {item.label}
-          </NavLink>
-        ))}
-      </nav>
-      <div className="mt-auto rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+      <div className="mt-6 min-h-0 flex-1 overflow-y-auto pr-1">
+        <nav className="space-y-1">
+          {navItems.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              onClick={() => setOpen(false)}
+              className={({ isActive }) =>
+                `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
+                  isActive ? "bg-white text-slate-950" : "text-slate-400 hover:bg-white/10 hover:text-white"
+                }`
+              }
+            >
+              <item.icon size={17} />
+              {item.label}
+            </NavLink>
+          ))}
+        </nav>
+        <div className="mt-7">
+          <p className="px-3 text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">Industries</p>
+          <nav className="mt-3 space-y-1">
+            {workspaceNav.map((item) => (
+              <NavLink
+                key={item.slug}
+                to={`/workspaces/${item.slug}`}
+                onClick={() => setOpen(false)}
+                className={({ isActive }) =>
+                  `block truncate rounded-xl px-3 py-2 text-sm font-medium transition ${
+                    isActive ? "bg-white text-slate-950" : "text-slate-400 hover:bg-white/10 hover:text-white"
+                  }`
+                }
+              >
+                {item.label}
+              </NavLink>
+            ))}
+          </nav>
+        </div>
+      </div>
+      <div className="mt-4 shrink-0 rounded-2xl border border-white/10 bg-white/[0.04] p-3">
         <div className="flex items-center gap-3">
           <div className="grid h-9 w-9 place-items-center rounded-full bg-white/10 text-xs font-bold">{initials(user?.name)}</div>
           <div className="min-w-0">

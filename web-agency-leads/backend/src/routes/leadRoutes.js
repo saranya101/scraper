@@ -7,6 +7,7 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 const router = Router();
 
 const status = z.enum(["NOT_CONTACTED", "CONTACTED", "REPLIED", "CLOSED", "ARCHIVED"]);
+const pipelineStage = z.enum(["NOT_CONTACTED", "DRAFTED", "SENT", "REPLIED", "MEETING", "PROPOSAL", "WON", "LOST"]);
 const priority = z.enum(["HOT", "WARM", "COLD"]);
 const websiteStatus = z.enum([
   "WORKING",
@@ -45,6 +46,9 @@ const leadBody = z.object({
   priority: priority.optional(),
   outreachEmail: z.string().optional().nullable(),
   status: status.optional(),
+  pipelineStage: pipelineStage.optional(),
+  assignedToUserId: z.string().optional().nullable(),
+  reminderDate: z.string().datetime().optional().nullable(),
   websiteStatus: websiteStatus.optional(),
   statusCode: z.coerce.number().int().optional().nullable(),
   accessIssue: z.string().optional().nullable(),
@@ -56,9 +60,50 @@ const leadBody = z.object({
 
 router.get("/", asyncHandler(leadController.list));
 router.get("/meta/catalog", asyncHandler(leadController.meta));
+router.get("/pipeline", asyncHandler(leadController.pipeline));
+router.put(
+  "/bulk",
+  validate({
+    parse: (value) =>
+      z
+        .object({
+          body: z.object({
+            leadIds: z.array(z.string()).min(1),
+            pipelineStage: pipelineStage.optional(),
+            assignedToUserId: z.string().optional().nullable(),
+            reminderDate: z.string().datetime().optional().nullable()
+          })
+        })
+        .parse(value)
+  }),
+  asyncHandler(leadController.bulkUpdate)
+);
 router.post("/reprocess-opportunities", asyncHandler(leadController.reprocessAllOpportunities));
 router.get("/:id", asyncHandler(leadController.get));
 router.post("/:id/reprocess-opportunities", asyncHandler(leadController.reprocessOpportunities));
+router.put(
+  "/:id/stage",
+  validate({
+    parse: (value) => z.object({ params: z.object({ id: z.string().min(1) }), body: z.object({ pipelineStage }) }).parse(value)
+  }),
+  asyncHandler(leadController.stage)
+);
+router.put(
+  "/:id/assign",
+  validate({
+    parse: (value) =>
+      z.object({ params: z.object({ id: z.string().min(1) }), body: z.object({ assignedToUserId: z.string().optional().nullable() }) }).parse(value)
+  }),
+  asyncHandler(leadController.assign)
+);
+router.post(
+  "/:id/reminder",
+  validate({
+    parse: (value) =>
+      z.object({ params: z.object({ id: z.string().min(1) }), body: z.object({ reminderDate: z.string().datetime().optional().nullable() }) }).parse(value)
+  }),
+  asyncHandler(leadController.reminder)
+);
 router.post("/", validate({ parse: (value) => z.object({ body: leadBody }).parse(value) }), asyncHandler(leadController.create));
 router.put(
   "/:id",

@@ -5,13 +5,14 @@ load_dotenv()
 API_KEY = os.getenv("GOOGLE_API_KEY")
 
 QUERIES = [
-    "manufacturing company in Singapore",
-    "construction supplier in Singapore",
-    "engineering company in Singapore",
-    "small business in Dallas Texas",
-    "contractor in Austin Texas",
-    "manufacturing company in Ohio",
-    "plumbing company in Florida",
+    "aesthetic clinic in Singapore",
+    "med spa in Los Angeles",
+    "beauty salon in Dallas Texas",
+    "hair salon in Austin Texas",
+    "nail salon in New York",
+    "dental clinic in Singapore",
+    "pilates studio in Miami",
+    "interior designer in Singapore",
 ]
 
 def search_places(query):

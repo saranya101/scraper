@@ -1,0 +1,126 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+}
+
+enum LeadPriority {
+  HOT
+  WARM
+  COLD
+}
+
+enum LeadStatus {
+  NOT_CONTACTED
+  CONTACTED
+  REPLIED
+  CLOSED
+  ARCHIVED
+}
+
+model User {
+  id            String              @id @default(cuid())
+  name          String
+  email         String              @unique
+  passwordHash  String
+  role          UserRole            @default(ADMIN)
+  notes         LeadNote[]
+  statusHistory LeadStatusHistory[]
+  imports       Import[]
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  @@map("users")
+}
+
+model Lead {
+  id             String              @id @default(cuid())
+  company        String
+  website        String              @unique
+  phone          String?
+  address        String?
+  industry       String?
+  screenshotPath String?
+  score          Int                 @default(7)
+  priority       LeadPriority        @default(COLD)
+  outreachEmail  String?             @db.Text
+  status         LeadStatus          @default(NOT_CONTACTED)
+  issues         LeadIssue[]
+  notes          LeadNote[]
+  statusHistory  LeadStatusHistory[]
+  screenshots    Screenshot[]
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  @@index([company])
+  @@index([industry])
+  @@index([status])
+  @@index([priority])
+  @@map("leads")
+}
+
+model LeadIssue {
+  id        String   @id @default(cuid())
+  leadId    String
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  issueText String
+  createdAt DateTime @default(now())
+
+  @@map("lead_issues")
+}
+
+model LeadNote {
+  id        String   @id @default(cuid())
+  leadId    String
+  userId    String
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  note      String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([leadId])
+  @@map("lead_notes")
+}
+
+model LeadStatusHistory {
+  id        String     @id @default(cuid())
+  leadId    String
+  userId    String
+  lead      Lead       @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  oldStatus LeadStatus?
+  newStatus LeadStatus
+  createdAt DateTime   @default(now())
+
+  @@index([leadId])
+  @@map("lead_status_history")
+}
+
+model Import {
+  id         String   @id @default(cuid())
+  fileName   String
+  importedBy String
+  user       User     @relation(fields: [importedBy], references: [id], onDelete: Cascade)
+  totalRows  Int
+  createdAt  DateTime @default(now())
+
+  @@map("imports")
+}
+
+model Screenshot {
+  id        String   @id @default(cuid())
+  leadId    String
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  imagePath String
+  createdAt DateTime @default(now())
+
+  @@map("screenshots")
+}

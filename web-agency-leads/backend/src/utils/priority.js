@@ -5,6 +5,14 @@ export function priorityFromScore(score) {
   return "COLD";
 }
 
+export function priorityFromAudit(score, opportunityScore) {
+  const auditScore = Number(score || 7);
+  const opportunity = Number(opportunityScore || 0);
+  if ((auditScore >= 1 && auditScore <= 4) || opportunity >= 8) return "HOT";
+  if (auditScore >= 5 && auditScore <= 6) return "WARM";
+  return "COLD";
+}
+
 export function normalizeWebsite(website) {
   if (!website) return "";
   try {

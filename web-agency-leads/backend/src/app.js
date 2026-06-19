@@ -1,4 +1,6 @@
 import "dotenv/config";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import express from "express";
@@ -12,6 +14,8 @@ if (!process.env.JWT_SECRET) {
 }
 
 const app = express();
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const uploadsDir = path.resolve(__dirname, "../uploads");
 
 app.use(helmet());
 app.use(
@@ -23,6 +27,7 @@ app.use(
 app.use(express.json({ limit: "2mb" }));
 app.use(cookieParser());
 app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
+app.use("/uploads", express.static(uploadsDir));
 app.use("/api", routes);
 app.use(notFoundHandler);
 app.use(errorHandler);

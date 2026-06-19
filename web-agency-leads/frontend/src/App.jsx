@@ -5,6 +5,7 @@ import DashboardPage from "./pages/DashboardPage.jsx";
 import ImportPage from "./pages/ImportPage.jsx";
 import LeadDetailPage from "./pages/LeadDetailPage.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
+import ScannerPage from "./pages/ScannerPage.jsx";
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -26,6 +27,7 @@ export default function App() {
         }
       >
         <Route index element={<DashboardPage />} />
+        <Route path="scanner" element={<ScannerPage />} />
         <Route path="leads/:id" element={<LeadDetailPage />} />
         <Route path="imports" element={<ImportPage />} />
       </Route>

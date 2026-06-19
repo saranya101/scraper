@@ -1,6 +1,7 @@
 import { prisma } from "../repositories/prisma.js";
 import { HttpError, notFound } from "../utils/httpError.js";
-import { normalizeWebsite, priorityFromScore } from "../utils/priority.js";
+import { normalizeWebsite, priorityFromAudit } from "../utils/priority.js";
+import * as serviceOpportunityService from "./serviceOpportunityService.js";
 
 const includeLead = {
   issues: { orderBy: { createdAt: "asc" } },
@@ -12,7 +13,11 @@ const includeLead = {
     orderBy: { createdAt: "desc" },
     include: { user: { select: { id: true, name: true, email: true } } }
   },
-  screenshots: { orderBy: { createdAt: "desc" } }
+  screenshots: { orderBy: { createdAt: "desc" } },
+  serviceOpportunities: {
+    include: { service: true },
+    orderBy: [{ recommended: "desc" }, { score: "desc" }]
+  }
 };
 
 function leadData(input) {
@@ -23,11 +28,26 @@ function leadData(input) {
     phone: input.phone || null,
     address: input.address || null,
     industry: input.industry || null,
+    location: input.location || null,
     screenshotPath: input.screenshotPath || null,
+    mobileScreenshotPath: input.mobileScreenshotPath || null,
     score,
-    priority: priorityFromScore(score),
+    visualDesignScore: input.visualDesignScore == null ? null : Number(input.visualDesignScore),
+    mobileScore: input.mobileScore == null ? null : Number(input.mobileScore),
+    trustScore: input.trustScore == null ? null : Number(input.trustScore),
+    ctaScore: input.ctaScore == null ? null : Number(input.ctaScore),
+    seoScore: input.seoScore == null ? null : Number(input.seoScore),
+    opportunityScore: input.opportunityScore == null ? null : Number(input.opportunityScore),
+    estimatedProjectValue: input.estimatedProjectValue || null,
+    priority: input.priority || priorityFromAudit(score, input.opportunityScore),
     outreachEmail: input.outreachEmail || null,
-    status: input.status || "NOT_CONTACTED"
+    status: input.status || "NOT_CONTACTED",
+    websiteStatus: input.websiteStatus || "UNKNOWN",
+    statusCode: input.statusCode == null ? null : Number(input.statusCode),
+    accessIssue: input.accessIssue || null,
+    accessIssueReason: input.accessIssueReason || null,
+    lastCheckedAt: input.lastCheckedAt || null,
+    recommendedFixes: input.recommendedFixes || undefined
   };
 }
 
@@ -38,19 +58,32 @@ export async function listLeads(query) {
   const where = {
     ...(query.priority ? { priority: query.priority } : {}),
     ...(query.status ? { status: query.status } : {}),
+    ...(query.websiteStatus ? { websiteStatus: query.websiteStatus } : {}),
+    ...(query.industry ? { industry: { contains: query.industry, mode: "insensitive" } } : {}),
+    ...(query.serviceId ? { serviceOpportunities: { some: { serviceId: query.serviceId } } } : {}),
+    ...(query.recommendedServiceId ? { serviceOpportunities: { some: { serviceId: query.recommendedServiceId, recommended: true } } } : {}),
+    ...(query.minServiceScore ? { serviceOpportunities: { some: { score: { gte: Number(query.minServiceScore) } } } } : {}),
+    ...(query.location ? { location: { contains: query.location, mode: "insensitive" } } : {}),
+    ...(query.hasPhone === "true" ? { phone: { not: null } } : {}),
+    ...(query.hasScreenshot === "true" ? { screenshotPath: { not: null } } : {}),
+    ...(query.minScore ? { score: { gte: Number(query.minScore) } } : {}),
+    ...(query.maxScore ? { score: { ...(query.minScore ? { gte: Number(query.minScore) } : {}), lte: Number(query.maxScore) } } : {}),
     ...(search
       ? {
           OR: [
             { company: { contains: search, mode: "insensitive" } },
             { industry: { contains: search, mode: "insensitive" } },
+            { location: { contains: search, mode: "insensitive" } },
             { address: { contains: search, mode: "insensitive" } },
-            { website: { contains: search, mode: "insensitive" } }
+            { website: { contains: search, mode: "insensitive" } },
+            { notes: { some: { note: { contains: search, mode: "insensitive" } } } },
+            { issues: { some: { issueText: { contains: search, mode: "insensitive" } } } }
           ]
         }
       : {})
   };
 
-  const sortBy = ["company", "score", "priority", "status", "createdAt", "updatedAt"].includes(query.sortBy)
+  const sortBy = ["company", "score", "opportunityScore", "priority", "status", "createdAt", "updatedAt"].includes(query.sortBy)
     ? query.sortBy
     : "createdAt";
   const sortOrder = query.sortOrder === "asc" ? "asc" : "desc";
@@ -61,7 +94,15 @@ export async function listLeads(query) {
       orderBy: { [sortBy]: sortOrder },
       skip: (page - 1) * pageSize,
       take: pageSize,
-      include: { issues: true, _count: { select: { notes: true } } }
+      include: {
+        issues: true,
+        serviceOpportunities: {
+          where: { recommended: true },
+          include: { service: true },
+          take: 1
+        },
+        _count: { select: { notes: true } }
+      }
     }),
     prisma.lead.count({ where }),
     getStats()
@@ -101,14 +142,21 @@ export async function createLead(input) {
   const data = leadData(input);
   const issues = Array.isArray(input.issues) ? input.issues.filter(Boolean) : [];
   try {
-    return await prisma.lead.create({
+    const lead = await prisma.lead.create({
       data: {
         ...data,
         issues: { create: issues.map((issueText) => ({ issueText })) },
-        screenshots: data.screenshotPath ? { create: { imagePath: data.screenshotPath } } : undefined
+        screenshots: {
+          create: [
+            data.screenshotPath ? { imagePath: data.screenshotPath, type: "DESKTOP" } : null,
+            data.mobileScreenshotPath ? { imagePath: data.mobileScreenshotPath, type: "MOBILE" } : null
+          ].filter(Boolean)
+        }
       },
       include: includeLead
     });
+    await serviceOpportunityService.generateForLead(lead.id);
+    return getLead(lead.id);
   } catch (error) {
     if (error.code === "P2002") throw new HttpError(409, "A lead with this website already exists");
     throw error;
@@ -122,7 +170,7 @@ export async function updateLead(id, input, userId) {
   const data = leadData({ ...current, ...input });
   const statusChanged = input.status && input.status !== current.status;
 
-  return prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async (tx) => {
     const lead = await tx.lead.update({
       where: { id },
       data,
@@ -142,8 +190,11 @@ export async function updateLead(id, input, userId) {
       });
     }
 
-    return tx.lead.findUnique({ where: { id }, include: includeLead });
+    const updated = await tx.lead.findUnique({ where: { id }, include: includeLead });
+    return updated;
   });
+  await serviceOpportunityService.generateForLead(id);
+  return getLead(id);
 }
 
 export async function deleteLead(id) {
@@ -165,4 +216,17 @@ export async function listNotes(leadId) {
     orderBy: { createdAt: "desc" },
     include: { user: { select: { id: true, name: true, email: true } } }
   });
+}
+
+export async function reprocessOpportunities(id) {
+  await getLead(id);
+  return serviceOpportunityService.generateForLead(id);
+}
+
+export async function reprocessAllOpportunities() {
+  return serviceOpportunityService.generateForAllLeads();
+}
+
+export async function getMeta() {
+  return serviceOpportunityService.getCatalog();
 }

@@ -8,6 +8,7 @@ import { Button } from "../components/ui/Button.jsx";
 import { Input, Select } from "../components/ui/Input.jsx";
 import { useToast } from "../hooks/useToast.jsx";
 import { api } from "../services/api.js";
+import { websiteStatuses } from "../utils/format.js";
 
 const statLabels = [
   ["total", "Total leads"],
@@ -27,7 +28,8 @@ export default function DashboardPage() {
   const [view, setView] = useState("cards");
   const [modalLead, setModalLead] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
-  const [filters, setFilters] = useState({ search: "", priority: "", status: "", sortBy: "createdAt", sortOrder: "desc", page: 1 });
+  const [catalog, setCatalog] = useState({ industries: [], services: [] });
+  const [filters, setFilters] = useState({ search: "", priority: "", status: "", websiteStatus: "", industry: "", recommendedServiceId: "", minServiceScore: "", minScore: "", maxScore: "", hasScreenshot: "", hasPhone: "", sortBy: "createdAt", sortOrder: "desc", page: 1 });
 
   const params = useMemo(() => Object.fromEntries(Object.entries(filters).filter(([, value]) => value)), [filters]);
 
@@ -49,6 +51,10 @@ export default function DashboardPage() {
     const timer = setTimeout(loadLeads, 250);
     return () => clearTimeout(timer);
   }, [JSON.stringify(params)]);
+
+  useEffect(() => {
+    api.get("/leads/meta/catalog").then(({ data }) => setCatalog(data)).catch(() => {});
+  }, []);
 
   async function saveLead(payload) {
     if (modalLead) {
@@ -124,6 +130,10 @@ export default function DashboardPage() {
             <option value="CLOSED">Closed</option>
             <option value="ARCHIVED">Archived</option>
           </Select>
+          <Select value={filters.websiteStatus} onChange={(event) => setFilters({ ...filters, websiteStatus: event.target.value, page: 1 })}>
+            <option value="">Website status</option>
+            {Object.entries(websiteStatuses).map(([key, item]) => <option key={key} value={key}>{item.label}</option>)}
+          </Select>
           <Select value={`${filters.sortBy}:${filters.sortOrder}`} onChange={(event) => {
             const [sortBy, sortOrder] = event.target.value.split(":");
             setFilters({ ...filters, sortBy, sortOrder });
@@ -137,6 +147,29 @@ export default function DashboardPage() {
             <button onClick={() => setView("cards")} className={`rounded-md p-2 ${view === "cards" ? "bg-white shadow-sm" : "text-slate-500"}`} aria-label="Card view"><Grid2X2 size={16} /></button>
             <button onClick={() => setView("table")} className={`rounded-md p-2 ${view === "table" ? "bg-white shadow-sm" : "text-slate-500"}`} aria-label="Table view"><List size={16} /></button>
           </div>
+        </div>
+        <div className="mt-3 grid gap-3 md:grid-cols-4">
+          <Select value={filters.industry} onChange={(event) => setFilters({ ...filters, industry: event.target.value, page: 1 })}>
+            <option value="">All industries</option>
+            {catalog.industries.map((industry) => <option key={industry.id} value={industry.name}>{industry.name}</option>)}
+          </Select>
+          <Select value={filters.recommendedServiceId} onChange={(event) => setFilters({ ...filters, recommendedServiceId: event.target.value, page: 1 })}>
+            <option value="">Recommended service</option>
+            {catalog.services.map((service) => <option key={service.id} value={service.id}>{service.name}</option>)}
+          </Select>
+          <Input type="number" min="1" max="10" placeholder="Min service score" value={filters.minServiceScore} onChange={(event) => setFilters({ ...filters, minServiceScore: event.target.value, page: 1 })} />
+          <Input type="number" min="1" max="10" placeholder="Min score" value={filters.minScore} onChange={(event) => setFilters({ ...filters, minScore: event.target.value, page: 1 })} />
+        </div>
+        <div className="mt-3 grid gap-3 md:grid-cols-4">
+          <Input type="number" min="1" max="10" placeholder="Max score" value={filters.maxScore} onChange={(event) => setFilters({ ...filters, maxScore: event.target.value, page: 1 })} />
+          <Select value={filters.hasScreenshot} onChange={(event) => setFilters({ ...filters, hasScreenshot: event.target.value, page: 1 })}>
+            <option value="">Screenshot optional</option>
+            <option value="true">Has screenshot</option>
+          </Select>
+          <Select value={filters.hasPhone} onChange={(event) => setFilters({ ...filters, hasPhone: event.target.value, page: 1 })}>
+            <option value="">Phone optional</option>
+            <option value="true">Has phone</option>
+          </Select>
         </div>
       </div>
 

@@ -1,4 +1,4 @@
-import { BarChart3, DatabaseZap, LogOut, Menu, Search, Sparkles, UsersRound, X } from "lucide-react";
+import { BarChart3, DatabaseZap, LogOut, Menu, Radar, Search, Sparkles, UsersRound, X } from "lucide-react";
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { Button } from "../components/ui/Button.jsx";
@@ -7,6 +7,7 @@ import { initials } from "../utils/format.js";
 
 const navItems = [
   { to: "/", label: "Leads", icon: BarChart3 },
+  { to: "/scanner", label: "Scanner", icon: Radar },
   { to: "/imports", label: "Imports", icon: DatabaseZap }
 ];
 

@@ -25,6 +25,42 @@ enum LeadStatus {
   ARCHIVED
 }
 
+enum WebsiteStatus {
+  WORKING
+  CLOUDFLARE
+  CAPTCHA
+  FORBIDDEN
+  NOT_FOUND
+  SERVER_ERROR
+  SSL_ERROR
+  TIMEOUT
+  REDIRECT_LOOP
+  DOMAIN_PARKED
+  WEBSITE_OFFLINE
+  NO_WEBSITE
+  BOT_PROTECTION
+  UNKNOWN
+}
+
+enum ScanJobStatus {
+  PENDING
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum ScanDepth {
+  QUICK
+  FULL
+  DEEP
+}
+
+enum ScreenshotType {
+  DESKTOP
+  MOBILE
+}
+
 model User {
   id            String              @id @default(cuid())
   name          String
@@ -34,6 +70,8 @@ model User {
   notes         LeadNote[]
   statusHistory LeadStatusHistory[]
   imports       Import[]
+  scanJobs      ScanJob[]
+  scanTemplates ScanTemplate[]
   createdAt     DateTime            @default(now())
   updatedAt     DateTime            @updatedAt
 
@@ -47,23 +85,104 @@ model Lead {
   phone          String?
   address        String?
   industry       String?
+  location       String?
   screenshotPath String?
+  mobileScreenshotPath String?
   score          Int                 @default(7)
+  visualDesignScore Int?
+  mobileScore       Int?
+  trustScore        Int?
+  ctaScore          Int?
+  seoScore          Int?
+  opportunityScore  Int?
+  estimatedProjectValue String?
   priority       LeadPriority        @default(COLD)
   outreachEmail  String?             @db.Text
   status         LeadStatus          @default(NOT_CONTACTED)
+  websiteStatus  WebsiteStatus       @default(UNKNOWN)
+  statusCode     Int?
+  accessIssue    String?
+  accessIssueReason String?          @db.Text
+  lastCheckedAt  DateTime?
+  recommendedFixes Json?
   issues         LeadIssue[]
   notes          LeadNote[]
   statusHistory  LeadStatusHistory[]
   screenshots    Screenshot[]
+  serviceOpportunities ServiceOpportunity[]
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
 
   @@index([company])
   @@index([industry])
+  @@index([location])
   @@index([status])
   @@index([priority])
+  @@index([websiteStatus])
   @@map("leads")
+}
+
+model Industry {
+  id          String               @id @default(cuid())
+  name        String
+  slug        String               @unique
+  description String?              @db.Text
+  scoringRule IndustryScoringRule?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  @@map("industries")
+}
+
+model AgencyService {
+  id          String               @id @default(cuid())
+  name        String
+  slug        String               @unique
+  description String?              @db.Text
+  baseMinValue Int
+  baseMaxValue Int
+  opportunities ServiceOpportunity[]
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  @@map("services")
+}
+
+model IndustryScoringRule {
+  id                String   @id @default(cuid())
+  industryId        String   @unique
+  industry          Industry @relation(fields: [industryId], references: [id], onDelete: Cascade)
+  designWeight      Float    @default(1)
+  mobileWeight      Float    @default(1)
+  trustWeight       Float    @default(1)
+  ctaWeight         Float    @default(1)
+  seoWeight         Float    @default(1)
+  conversionWeight  Float    @default(1)
+  bookingWeight     Float    @default(1)
+  socialProofWeight Float    @default(1)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("industry_scoring_rules")
+}
+
+model ServiceOpportunity {
+  id                String        @id @default(cuid())
+  leadId            String
+  lead              Lead          @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  serviceId         String
+  service           AgencyService @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  score             Int
+  estimatedMinValue Int
+  estimatedMaxValue Int
+  reason            String        @db.Text
+  recommended       Boolean       @default(false)
+  createdAt         DateTime      @default(now())
+
+  @@unique([leadId, serviceId])
+  @@index([recommended])
+  @@index([score])
+  @@map("service_opportunities")
 }
 
 model LeadIssue {
@@ -116,11 +235,106 @@ model Import {
 }
 
 model Screenshot {
-  id        String   @id @default(cuid())
-  leadId    String
-  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  imagePath String
-  createdAt DateTime @default(now())
+  id           String         @id @default(cuid())
+  leadId       String?
+  scanResultId String?
+  lead         Lead?          @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  scanResult   ScanResult?    @relation(fields: [scanResultId], references: [id], onDelete: Cascade)
+  imagePath    String
+  type         ScreenshotType @default(DESKTOP)
+  createdAt    DateTime      @default(now())
 
   @@map("screenshots")
+}
+
+model ScanJob {
+  id          String        @id @default(cuid())
+  keyword     String
+  location    String
+  maxResults  Int          @default(10)
+  status      ScanJobStatus @default(PENDING)
+  createdBy   String
+  user        User          @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+  progress    Int           @default(0)
+  logs        Json?
+  retryCount  Int           @default(0)
+  startedAt   DateTime?
+  failedAt    DateTime?
+  scanDepth   ScanDepth     @default(QUICK)
+  country     String?
+  state       String?
+  city        String?
+  minReviews  Int?
+  hasWebsiteOnly Boolean    @default(false)
+  results     ScanResult[]
+  createdAt   DateTime      @default(now())
+  completedAt DateTime?
+
+  @@index([status])
+  @@map("scan_jobs")
+}
+
+model ScanResult {
+  id                   String        @id @default(cuid())
+  scanJobId            String
+  scanJob              ScanJob       @relation(fields: [scanJobId], references: [id], onDelete: Cascade)
+  company              String
+  website              String?
+  phone                String?
+  address              String?
+  industry             String?
+  location             String?
+  score                Int           @default(7)
+  visualDesignScore    Int?
+  mobileScore          Int?
+  trustScore           Int?
+  ctaScore             Int?
+  seoScore             Int?
+  opportunityScore     Int?
+  estimatedProjectValue String?
+  priority             LeadPriority  @default(COLD)
+  websiteStatus        WebsiteStatus @default(UNKNOWN)
+  statusCode           Int?
+  accessIssue          String?
+  accessIssueReason    String?       @db.Text
+  lastCheckedAt        DateTime?
+  loadTime             Int?
+  sslValid             Boolean?
+  redirectCount        Int?
+  extractedHeadings    Json?
+  extractedCTAs        Json?
+  extractedForms       Json?
+  extractedSocialLinks Json?
+  extractedEmails      Json?
+  extractedPhones      Json?
+  contactPageUrl       String?
+  rawExtractedData     Json?
+  screenshotPath       String?
+  mobileScreenshotPath String?
+  issues               Json?
+  recommendedFixes     Json?
+  outreachEmail        String?       @db.Text
+  imported             Boolean       @default(false)
+  duplicate            Boolean       @default(false)
+  screenshots          Screenshot[]
+  createdAt            DateTime      @default(now())
+
+  @@index([scanJobId])
+  @@index([priority])
+  @@index([websiteStatus])
+  @@map("scan_results")
+}
+
+model ScanTemplate {
+  id         String   @id @default(cuid())
+  name       String
+  keyword    String
+  location   String
+  maxResults Int      @default(10)
+  filters    Json?
+  createdBy  String
+  user       User     @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@map("scan_templates")
 }

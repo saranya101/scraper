@@ -2,7 +2,7 @@ import { ArrowUpRight, Pencil, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Badge } from "./ui/Badge.jsx";
 import { Button } from "./ui/Button.jsx";
-import { domain, priorities, statuses } from "../utils/format.js";
+import { domain, priorities, statuses, websiteStatuses } from "../utils/format.js";
 
 export default function LeadTable({ leads, onEdit, onDelete }) {
   return (
@@ -16,6 +16,8 @@ export default function LeadTable({ leads, onEdit, onDelete }) {
               <th className="px-4 py-3">Score</th>
               <th className="px-4 py-3">Priority</th>
               <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">Website</th>
+              <th className="px-4 py-3">Recommended</th>
               <th className="px-4 py-3 text-right">Actions</th>
             </tr>
           </thead>
@@ -32,6 +34,8 @@ export default function LeadTable({ leads, onEdit, onDelete }) {
                 <td className="px-4 py-3 font-semibold">{lead.score}/10</td>
                 <td className="px-4 py-3"><Badge className={priorities[lead.priority]?.className}>{priorities[lead.priority]?.label}</Badge></td>
                 <td className="px-4 py-3"><Badge className={statuses[lead.status]?.className}>{statuses[lead.status]?.label}</Badge></td>
+                <td className="px-4 py-3"><Badge className={websiteStatuses[lead.websiteStatus]?.className}>{websiteStatuses[lead.websiteStatus]?.label}</Badge></td>
+                <td className="px-4 py-3 text-slate-600">{lead.serviceOpportunities?.[0]?.service?.name || "-"}</td>
                 <td className="px-4 py-3">
                   <div className="flex justify-end gap-2">
                     <Button variant="ghost" className="px-2.5" onClick={() => onEdit(lead)}><Pencil size={15} /></Button>

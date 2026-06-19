@@ -4,6 +4,7 @@ import authRoutes from "./authRoutes.js";
 import importRoutes from "./importRoutes.js";
 import leadRoutes from "./leadRoutes.js";
 import noteRoutes from "./noteRoutes.js";
+import scannerRoutes from "./scannerRoutes.js";
 
 const router = Router();
 
@@ -11,6 +12,7 @@ router.get("/health", (_req, res) => res.json({ ok: true }));
 router.use("/auth", authRoutes);
 router.use("/leads", requireAuth, leadRoutes);
 router.use("/notes", requireAuth, noteRoutes);
+router.use("/scanner", requireAuth, scannerRoutes);
 router.use("/imports", requireAuth, importRoutes);
 
 export default router;

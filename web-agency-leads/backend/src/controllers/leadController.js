@@ -8,6 +8,10 @@ export async function get(req, res) {
   res.json(await leadService.getLead(req.params.id));
 }
 
+export async function meta(_req, res) {
+  res.json(await leadService.getMeta());
+}
+
 export async function create(req, res) {
   res.status(201).json(await leadService.createLead(req.body));
 }
@@ -19,4 +23,12 @@ export async function update(req, res) {
 export async function remove(req, res) {
   await leadService.deleteLead(req.params.id);
   res.status(204).send();
+}
+
+export async function reprocessOpportunities(req, res) {
+  res.json(await leadService.reprocessOpportunities(req.params.id));
+}
+
+export async function reprocessAllOpportunities(_req, res) {
+  res.json(await leadService.reprocessAllOpportunities());
 }

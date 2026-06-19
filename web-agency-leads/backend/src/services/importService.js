@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
-import ExcelJS from "exceljs";
+import XLSX from "xlsx";
 import { prisma } from "../repositories/prisma.js";
-import { normalizeWebsite, priorityFromScore } from "../utils/priority.js";
+import { normalizeWebsite, priorityFromAudit } from "../utils/priority.js";
+import * as serviceOpportunityService from "./serviceOpportunityService.js";
 
 const columnAliases = {
   company: ["company", "business", "name", "company name"],
@@ -9,10 +10,21 @@ const columnAliases = {
   phone: ["phone", "telephone", "contact number"],
   address: ["address", "location"],
   industry: ["industry", "industry query", "category", "niche"],
+  location: ["location", "city", "area"],
   score: ["score", "audit score", "ai score"],
+  visualDesignScore: ["visual design score", "design score"],
+  mobileScore: ["mobile score"],
+  trustScore: ["trust score"],
+  ctaScore: ["cta score"],
+  seoScore: ["seo score"],
+  opportunityScore: ["opportunity score"],
   screenshotPath: ["screenshot", "screenshot path", "image"],
+  mobileScreenshotPath: ["mobile screenshot", "mobile screenshot path"],
   outreachEmail: ["outreach", "outreach email", "email copy"],
-  issues: ["issues", "issue", "problems", "findings"]
+  issues: ["issues", "issue", "problems", "findings"],
+  recommendedFixes: ["recommended fixes", "fixes"],
+  websiteStatus: ["website status", "status"],
+  estimatedProjectValue: ["estimated project value", "project value"]
 };
 
 function normalizeHeader(header) {
@@ -25,32 +37,10 @@ function getValue(row, key) {
   return found ? row[found] : undefined;
 }
 
-async function rowsFromFile(file) {
-  const workbook = new ExcelJS.Workbook();
-  if (/\.csv$/i.test(file.originalname)) {
-    await workbook.csv.readFile(file.path);
-  } else {
-    await workbook.xlsx.readFile(file.path);
-  }
-
-  const worksheet = workbook.worksheets[0];
-  if (!worksheet) return [];
-
-  const headers = [];
-  worksheet.getRow(1).eachCell({ includeEmpty: true }, (cell, columnNumber) => {
-    headers[columnNumber] = String(cell.value || "").trim();
-  });
-
-  const rows = [];
-  worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
-    if (rowNumber === 1) return;
-    const item = {};
-    headers.forEach((header, columnNumber) => {
-      if (header) item[header] = row.getCell(columnNumber).text || row.getCell(columnNumber).value || "";
-    });
-    rows.push(item);
-  });
-  return rows;
+function rowsFromFile(file) {
+  const workbook = XLSX.readFile(file.path, { raw: false });
+  const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+  return XLSX.utils.sheet_to_json(firstSheet, { defval: "" });
 }
 
 function parseIssues(value) {
@@ -61,8 +51,29 @@ function parseIssues(value) {
     .filter(Boolean);
 }
 
+function parseWebsiteStatus(value) {
+  const status = String(value || "UNKNOWN").trim().toUpperCase().replaceAll(" ", "_").replaceAll("-", "_");
+  const allowed = new Set([
+    "WORKING",
+    "CLOUDFLARE",
+    "CAPTCHA",
+    "FORBIDDEN",
+    "NOT_FOUND",
+    "SERVER_ERROR",
+    "SSL_ERROR",
+    "TIMEOUT",
+    "REDIRECT_LOOP",
+    "DOMAIN_PARKED",
+    "WEBSITE_OFFLINE",
+    "NO_WEBSITE",
+    "BOT_PROTECTION",
+    "UNKNOWN"
+  ]);
+  return allowed.has(status) ? status : "UNKNOWN";
+}
+
 export async function importLeads(file, userId) {
-  const rows = await rowsFromFile(file);
+  const rows = rowsFromFile(file);
   const existing = await prisma.lead.findMany({ select: { website: true } });
   const existingSites = new Set(existing.map((lead) => normalizeWebsite(lead.website)));
   let created = 0;
@@ -77,20 +88,33 @@ export async function importLeads(file, userId) {
     }
 
     const score = Number(getValue(row, "score") || 7);
-    await prisma.lead.create({
+    const opportunityScore = getValue(row, "opportunityScore") ? Number(getValue(row, "opportunityScore")) : null;
+    const lead = await prisma.lead.create({
       data: {
         company,
         website,
         phone: String(getValue(row, "phone") || "").trim() || null,
         address: String(getValue(row, "address") || "").trim() || null,
         industry: String(getValue(row, "industry") || "").trim() || null,
+        location: String(getValue(row, "location") || getValue(row, "address") || "").trim() || null,
         score,
-        priority: priorityFromScore(score),
+        visualDesignScore: getValue(row, "visualDesignScore") ? Number(getValue(row, "visualDesignScore")) : null,
+        mobileScore: getValue(row, "mobileScore") ? Number(getValue(row, "mobileScore")) : null,
+        trustScore: getValue(row, "trustScore") ? Number(getValue(row, "trustScore")) : null,
+        ctaScore: getValue(row, "ctaScore") ? Number(getValue(row, "ctaScore")) : null,
+        seoScore: getValue(row, "seoScore") ? Number(getValue(row, "seoScore")) : null,
+        opportunityScore,
+        estimatedProjectValue: String(getValue(row, "estimatedProjectValue") || "").trim() || null,
+        priority: priorityFromAudit(score, opportunityScore),
         screenshotPath: String(getValue(row, "screenshotPath") || "").trim() || null,
+        mobileScreenshotPath: String(getValue(row, "mobileScreenshotPath") || "").trim() || null,
         outreachEmail: String(getValue(row, "outreachEmail") || "").trim() || null,
+        websiteStatus: parseWebsiteStatus(getValue(row, "websiteStatus")),
+        recommendedFixes: parseIssues(getValue(row, "recommendedFixes")),
         issues: { create: parseIssues(getValue(row, "issues")).map((issueText) => ({ issueText })) }
       }
     });
+    await serviceOpportunityService.generateForLead(lead.id);
     existingSites.add(website);
     created += 1;
   }

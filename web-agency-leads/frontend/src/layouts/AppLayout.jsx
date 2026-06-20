@@ -1,4 +1,4 @@
-import { BarChart3, ChartNoAxesCombined, Clock3, DatabaseZap, KanbanSquare, Layers3, LogOut, MailPlus, Menu, Moon, Radar, Search, Settings, Sparkles, Sun, UsersRound, X } from "lucide-react";
+import { BarChart3, ChartNoAxesCombined, Clock3, DatabaseZap, KanbanSquare, Layers3, LogOut, MailPlus, Menu, Moon, Plug, Radar, Search, Settings, Sparkles, Sun, UsersRound, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { Button } from "../components/ui/Button.jsx";
@@ -16,7 +16,8 @@ const navItems = [
   { to: "/workspaces", label: "Workspaces", icon: Layers3 },
   { to: "/scanner", label: "Scanner", icon: Radar },
   { to: "/imports", label: "Imports", icon: DatabaseZap },
-  { to: "/settings", label: "Settings", icon: Settings }
+  { to: "/settings", label: "Settings", icon: Settings },
+  { to: "/settings/email", label: "Email Settings", icon: Plug }
 ];
 
 export default function AppLayout() {

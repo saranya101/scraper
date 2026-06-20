@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowUpRight, Clipboard, Cpu, DollarSign, GitCompare, Globe2, History, Mail, MailPlus, MapPin, MessageCircle, Pencil, Phone, Plus, Search, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, Clipboard, Cpu, DollarSign, GitCompare, Globe2, History, Mail, MailCheck, MailPlus, MapPin, MessageCircle, Pencil, Phone, Plus, Search, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import LeadFormModal from "../components/LeadFormModal.jsx";
@@ -47,6 +47,7 @@ export default function LeadDetailPage() {
   const [loading, setLoading] = useState(true);
   const [note, setNote] = useState("");
   const [drafts, setDrafts] = useState([]);
+  const [emailHistory, setEmailHistory] = useState({ connectedAccounts: [], lastContactedAt: null, sends: [] });
   const [competitorData, setCompetitorData] = useState({ competitors: [], salesAngle: "", leadScore: null });
   const [revenueForm, setRevenueForm] = useState({});
   const [generatingDraft, setGeneratingDraft] = useState(false);
@@ -89,6 +90,11 @@ export default function LeadDetailPage() {
     setCompetitorData(data);
   }
 
+  async function loadEmailHistory() {
+    const { data } = await api.get(`/email/history/${id}`);
+    setEmailHistory(data);
+  }
+
   useEffect(() => {
     loadLead();
   }, [id]);
@@ -96,6 +102,7 @@ export default function LeadDetailPage() {
   useEffect(() => {
     loadDrafts().catch(() => {});
     loadCompetitors().catch(() => {});
+    loadEmailHistory().catch(() => {});
   }, [id]);
 
   async function updateStatus(status) {
@@ -599,6 +606,43 @@ export default function LeadDetailPage() {
             {!contactRows(lead).length && <p className="rounded-2xl border border-dashed border-slate-300 p-4 text-sm text-slate-500 md:col-span-2">No contact details captured yet. Run a full/deep scan to visit the contact page.</p>}
           </div>
           <pre className="whitespace-pre-wrap rounded-2xl bg-slate-950 p-5 text-sm leading-6 text-slate-100">{lead.outreachEmail || "No outreach copy saved yet."}</pre>
+        </div>
+
+        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div>
+              <h2 className="flex items-center gap-2 text-lg font-semibold"><MailCheck size={18} /> Email history</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                {emailHistory.lastContactedAt ? `Last contacted ${formatDate(emailHistory.lastContactedAt)}` : "No sent email logged yet."}
+              </p>
+            </div>
+            <div className="rounded-2xl bg-slate-50 px-4 py-3 text-sm">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Connected sender</p>
+              <p className="mt-1 font-semibold">{emailHistory.connectedAccounts?.[0]?.email || "No email connected"}</p>
+            </div>
+          </div>
+          <div className="space-y-3">
+            {(emailHistory.sends || []).map((send) => (
+              <div key={send.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <p className="font-semibold">{send.subject}</p>
+                    <p className="mt-1 text-sm text-slate-500">To {send.toEmail} from {send.emailAccount?.email || "connected sender"}</p>
+                  </div>
+                  <Badge className={send.status === "SENT" ? "bg-emerald-100 text-emerald-800 ring-emerald-200" : send.status === "FAILED" ? "bg-rose-100 text-rose-700 ring-rose-200" : "bg-slate-100 text-slate-700 ring-slate-200"}>
+                    {send.status}
+                  </Badge>
+                </div>
+                <p className="text-xs text-slate-400">{send.sentAt ? `Sent ${formatDate(send.sentAt)}` : `Created ${formatDate(send.createdAt)}`}</p>
+                {send.errorMessage && <p className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700">{send.errorMessage}</p>}
+                <details className="mt-3">
+                  <summary className="cursor-pointer text-sm font-semibold text-slate-500">View body</summary>
+                  <pre className="mt-3 whitespace-pre-wrap rounded-xl bg-white p-4 text-sm leading-6 text-slate-700">{send.body}</pre>
+                </details>
+              </div>
+            ))}
+            {!emailHistory.sends?.length && <p className="rounded-2xl border border-dashed border-slate-300 p-5 text-center text-sm text-slate-500">No email sends for this lead yet.</p>}
+          </div>
         </div>
 
         <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">

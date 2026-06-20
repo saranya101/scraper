@@ -24,6 +24,9 @@ const settingDefaults = {
     highValueLeadFound: true,
     replyReceived: true,
     meetingBooked: true
+  },
+  emailSending: {
+    dailySendLimit: 25
   }
 };
 
@@ -92,14 +95,15 @@ async function costSummary(costTracking) {
 
 export async function getSettings(userId) {
   await ensureDefaultCatalog();
-  const [users, industries, services, apiKeys, costTracking, darkMode, notifications] = await Promise.all([
+  const [users, industries, services, apiKeys, costTracking, darkMode, notifications, emailSending] = await Promise.all([
     prisma.user.findMany({ select: { id: true, name: true, email: true, role: true, createdAt: true }, orderBy: { name: "asc" } }),
     prisma.industry.findMany({ include: { scoringRule: true }, orderBy: { name: "asc" } }),
     prisma.agencyService.findMany({ orderBy: { name: "asc" } }),
     setting("apiKeys"),
     setting("costTracking"),
     setting("darkMode"),
-    setting("notifications")
+    setting("notifications"),
+    setting("emailSending")
   ]);
 
   return {
@@ -110,6 +114,7 @@ export async function getSettings(userId) {
     costSummary: await costSummary(costTracking),
     darkMode,
     notifications,
+    emailSending,
     industries,
     services
   };
@@ -125,7 +130,7 @@ export async function updateProfile(userId, input = {}) {
 }
 
 export async function updateAppSettings(userId, input = {}) {
-  const keys = ["apiKeys", "costTracking", "darkMode", "notifications"];
+  const keys = ["apiKeys", "costTracking", "darkMode", "notifications", "emailSending"];
   for (const key of keys) {
     if (input[key] !== undefined) {
       const current = await setting(key);

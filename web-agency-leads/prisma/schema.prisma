@@ -99,6 +99,17 @@ enum AutomationNotificationType {
   ERROR
 }
 
+enum EmailProvider {
+  GOOGLE
+  MICROSOFT
+}
+
+enum EmailSendStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
 model User {
   id            String              @id @default(cuid())
   name          String
@@ -112,6 +123,8 @@ model User {
   scanTemplates ScanTemplate[]
   assignedLeads Lead[]              @relation("LeadOwner")
   outreachDrafts OutreachDraft[]
+  emailAccounts EmailAccount[]
+  emailSends EmailSend[]
   automationSchedules AutomationSchedule[]
   automationNotifications AutomationNotification[]
   settingsUpdates AppSetting[]       @relation("SettingUpdater")
@@ -194,6 +207,7 @@ model Lead {
   screenshots    Screenshot[]
   serviceOpportunities ServiceOpportunity[]
   outreachDrafts OutreachDraft[]
+  emailSends     EmailSend[]
   competitors    Competitor[]
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
@@ -316,6 +330,7 @@ model OutreachDraft {
   fullMessage String              @db.Text
   status      OutreachDraftStatus @default(DRAFT)
   tone        String?
+  emailSends  EmailSend[]
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
 
@@ -324,6 +339,49 @@ model OutreachDraft {
   @@index([type])
   @@index([status])
   @@map("outreach_drafts")
+}
+
+model EmailAccount {
+  id                    String        @id @default(cuid())
+  userId                String
+  user                  User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider              EmailProvider
+  email                 String
+  accessTokenEncrypted  String        @db.Text
+  refreshTokenEncrypted String        @db.Text
+  expiresAt             DateTime?
+  connectedAt           DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+  sends                 EmailSend[]
+
+  @@unique([userId, provider, email])
+  @@index([userId])
+  @@map("email_accounts")
+}
+
+model EmailSend {
+  id              String          @id @default(cuid())
+  leadId          String
+  lead            Lead            @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  outreachDraftId String?
+  outreachDraft   OutreachDraft?  @relation(fields: [outreachDraftId], references: [id], onDelete: SetNull)
+  userId          String
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emailAccountId  String
+  emailAccount    EmailAccount    @relation(fields: [emailAccountId], references: [id], onDelete: Cascade)
+  toEmail         String
+  subject         String
+  body            String          @db.Text
+  status          EmailSendStatus @default(PENDING)
+  sentAt          DateTime?
+  errorMessage    String?         @db.Text
+  createdAt       DateTime        @default(now())
+
+  @@index([leadId])
+  @@index([userId])
+  @@index([emailAccountId])
+  @@index([status])
+  @@map("email_sends")
 }
 
 model Competitor {

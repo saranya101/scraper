@@ -282,6 +282,9 @@ export async function updateDraft(id, input = {}) {
   if (draft.type === "EMAIL" && draft.fullMessage) {
     await prisma.lead.update({ where: { id: draft.leadId }, data: { outreachEmail: draft.fullMessage } });
   }
+  if (data.status === "SENT") {
+    await prisma.lead.update({ where: { id: draft.leadId }, data: { pipelineStage: "SENT", status: "CONTACTED" } });
+  }
   return displayDraft(draft);
 }
 

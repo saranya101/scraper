@@ -48,6 +48,11 @@ function previewMessage(form) {
   return [form.subject ? `Subject: ${form.subject}` : null, form.opener, "", form.pitch, "", form.cta].filter((part) => part !== null).join("\n");
 }
 
+function emailRecipientBody(form) {
+  const body = form.fullMessage || [form.opener, "", form.pitch, "", form.cta].filter((part) => part !== null).join("\n");
+  return body.replace(/^subject:\s?.*(\r?\n){1,2}/i, "").trim();
+}
+
 function draftForm(draft, fallbackType = "EMAIL") {
   const type = draft?.type || fallbackType;
   const next = { ...emptyDraft, ...draft, type };
@@ -62,16 +67,22 @@ export default function OutreachPage() {
   const [queue, setQueue] = useState([]);
   const [drafts, setDrafts] = useState([]);
   const [leadDrafts, setLeadDrafts] = useState([]);
+  const [emailAccounts, setEmailAccounts] = useState([]);
   const [selectedLead, setSelectedLead] = useState(null);
   const [selectedDraft, setSelectedDraft] = useState(null);
+  const [emailAccountId, setEmailAccountId] = useState("");
+  const [recipientEmail, setRecipientEmail] = useState("");
+  const [confirmSend, setConfirmSend] = useState(false);
   const [form, setForm] = useState(emptyDraft);
   const [filters, setFilters] = useState({ industryId: "", serviceId: "", type: "", status: "" });
   const [tone, setTone] = useState("consultative");
   const [activeTab, setActiveTab] = useState("edit");
   const [generating, setGenerating] = useState(false);
+  const [sending, setSending] = useState(false);
 
   const params = useMemo(() => Object.fromEntries(Object.entries(filters).filter(([, value]) => value)), [filters]);
   const messagePreview = previewMessage(form);
+  const emailBody = emailRecipientBody(form);
 
   async function loadData() {
     const [queueRes, draftsRes] = await Promise.all([
@@ -94,6 +105,10 @@ export default function OutreachPage() {
 
   useEffect(() => {
     api.get("/leads/meta/catalog").then(({ data }) => setCatalog(data)).catch(() => {});
+    api.get("/email/accounts").then(({ data }) => {
+      setEmailAccounts(data);
+      if (data[0]) setEmailAccountId(data[0].id);
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -109,6 +124,7 @@ export default function OutreachPage() {
     setSelectedLead(lead);
     setSelectedDraft(null);
     setForm(emptyDraft);
+    setRecipientEmail(lead.ownerEmail || lead.generalEmail || "");
     setActiveTab("edit");
   }
 
@@ -120,6 +136,7 @@ export default function OutreachPage() {
       const generatedForm = draftForm(data, type);
       setSelectedDraft(data);
       setSelectedLead(data.lead || selectedLead);
+      setRecipientEmail(data.lead?.ownerEmail || data.lead?.generalEmail || selectedLead.ownerEmail || selectedLead.generalEmail || recipientEmail);
       setForm(generatedForm);
       setActiveTab("edit");
       push("Outreach generated");
@@ -140,6 +157,37 @@ export default function OutreachPage() {
     setForm(draftForm(data, form.type));
     push(status === "SENT" ? "Marked sent" : "Draft saved");
     await Promise.all([loadData(), loadLeadDrafts(data.leadId)]);
+  }
+
+  async function sendEmail() {
+    if (!selectedLead) return push("Select a lead first", "error");
+    if (!emailAccounts.length) return push("Connect Gmail or Outlook before sending", "error");
+    if (!recipientEmail) return push("Add a recipient email first", "error");
+    if (!form.subject) return push("Add an email subject first", "error");
+    if (!emailBody) return push("Add an email body first", "error");
+    setSending(true);
+    try {
+      const { data } = await api.post("/email/send", {
+        leadId: selectedLead.id,
+        outreachDraftId: selectedDraft?.id || null,
+        emailAccountId,
+        toEmail: recipientEmail,
+        subject: form.subject,
+        body: emailBody
+      });
+      if (data.status === "SENT") {
+        push("Email sent");
+        setConfirmSend(false);
+        setForm({ ...form, status: "SENT" });
+        await Promise.all([loadData(), loadLeadDrafts(selectedLead.id)]);
+      } else {
+        push(data.errorMessage || "Email send failed", "error");
+      }
+    } catch (error) {
+      push(error.response?.data?.message || "Email send failed", "error");
+    } finally {
+      setSending(false);
+    }
   }
 
   async function copyDraft() {
@@ -256,6 +304,7 @@ export default function OutreachPage() {
                 <Button variant="secondary" disabled={!selectedDraft} onClick={() => saveDraft("SAVED")}><Save size={16} /> Save</Button>
                 <Button variant="secondary" disabled={!messagePreview} onClick={copyDraft}><Clipboard size={16} /> Copy</Button>
                 <Button disabled={!selectedDraft || !messagePreview} onClick={() => saveDraft("SENT")}><Send size={16} /> Mark sent</Button>
+                <Button disabled={form.type !== "EMAIL" || !messagePreview || sending} onClick={() => setConfirmSend(true)}><Send size={16} /> {sending ? "Sending..." : "Send email"}</Button>
               </div>
             </div>
 
@@ -278,11 +327,16 @@ export default function OutreachPage() {
                 <div className="space-y-2 text-sm">
                   <div className="rounded-xl bg-white/10 p-3">
                     <p className="font-semibold">Email connector</p>
-                    <p className="mt-1 text-slate-400">Placeholder only. Sending stays disabled until API keys are configured.</p>
+                    <p className="mt-1 text-slate-400">{emailAccounts.length ? `${emailAccounts.length} account connected` : "Connect Gmail or Outlook in Email Settings before sending."}</p>
+                    {emailAccounts.length > 0 && (
+                      <Select value={emailAccountId} onChange={(event) => setEmailAccountId(event.target.value)} className="mt-3 bg-slate-900 text-white">
+                        {emailAccounts.map((account) => <option key={account.id} value={account.id}>{account.email}</option>)}
+                      </Select>
+                    )}
                   </div>
                   <div className="rounded-xl bg-white/10 p-3">
                     <p className="font-semibold">LinkedIn connector</p>
-                    <p className="mt-1 text-slate-400">Placeholder only. Use copy/preview for now.</p>
+                    <p className="mt-1 text-slate-400">Stopped here for now. LinkedIn sending is not implemented.</p>
                   </div>
                 </div>
               </div>
@@ -308,10 +362,16 @@ export default function OutreachPage() {
                   </Select>
                 </label>
                 {form.type === "EMAIL" && (
-                  <label className="md:col-span-2">
-                    <span className="mb-1.5 block text-sm font-medium">Subject</span>
-                    <Input value={form.subject || ""} onChange={(e) => setForm({ ...form, subject: e.target.value })} />
-                  </label>
+                  <>
+                    <label>
+                      <span className="mb-1.5 block text-sm font-medium">Recipient email</span>
+                      <Input value={recipientEmail} onChange={(e) => setRecipientEmail(e.target.value)} placeholder="owner@company.com" />
+                    </label>
+                    <label>
+                      <span className="mb-1.5 block text-sm font-medium">Subject</span>
+                      <Input value={form.subject || ""} onChange={(e) => setForm({ ...form, subject: e.target.value })} />
+                    </label>
+                  </>
                 )}
                 <label className="md:col-span-2">
                   <span className="mb-1.5 block text-sm font-medium">Opener</span>
@@ -340,6 +400,7 @@ export default function OutreachPage() {
                   <Badge className="bg-slate-100 text-slate-700 ring-slate-200">{outreachTypes[form.type]}</Badge>
                 </div>
                 {form.type === "EMAIL" && form.subject && <p className="mb-4 rounded-2xl bg-white p-3 text-sm font-semibold">Subject: {form.subject}</p>}
+                {form.type === "EMAIL" && <p className="mb-4 rounded-2xl bg-white p-3 text-sm">To: <span className="font-semibold">{recipientEmail || "No recipient"}</span></p>}
                 <pre className="min-h-80 whitespace-pre-wrap rounded-2xl bg-white p-5 text-sm leading-6 text-slate-800">{messagePreview || "Generate or open a draft to preview the final recipient-facing message."}</pre>
               </div>
             )}
@@ -390,6 +451,25 @@ export default function OutreachPage() {
           </div>
         </section>
       </div>
+
+      {confirmSend && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/50 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-xl rounded-3xl bg-white p-6 shadow-glow">
+            <h2 className="text-xl font-semibold">Send this email?</h2>
+            <p className="mt-2 text-sm text-slate-500">This will send from the connected account, log the send, and move the lead to Sent.</p>
+            <div className="mt-5 space-y-3 rounded-2xl bg-slate-50 p-4 text-sm">
+              <p><span className="font-semibold">From:</span> {emailAccounts.find((account) => account.id === emailAccountId)?.email || "No account selected"}</p>
+              <p><span className="font-semibold">To:</span> {recipientEmail || "No recipient"}</p>
+              <p><span className="font-semibold">Subject:</span> {form.subject || "No subject"}</p>
+            </div>
+            <pre className="mt-4 max-h-72 overflow-auto whitespace-pre-wrap rounded-2xl border border-slate-200 p-4 text-sm">{emailBody}</pre>
+            <div className="mt-5 flex justify-end gap-3">
+              <Button variant="secondary" onClick={() => setConfirmSend(false)}>Cancel</Button>
+              <Button onClick={sendEmail} disabled={sending}>{sending ? "Sending..." : "Confirm send"}</Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

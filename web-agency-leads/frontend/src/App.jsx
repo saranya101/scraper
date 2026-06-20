@@ -5,6 +5,7 @@ import AnalyticsPage from "./pages/AnalyticsPage.jsx";
 import AutomationPage from "./pages/AutomationPage.jsx";
 import CrmPage from "./pages/CrmPage.jsx";
 import DashboardPage from "./pages/DashboardPage.jsx";
+import EmailSettingsPage from "./pages/EmailSettingsPage.jsx";
 import ImportPage from "./pages/ImportPage.jsx";
 import LeadDetailPage from "./pages/LeadDetailPage.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
@@ -44,6 +45,7 @@ export default function App() {
         <Route path="leads/:id" element={<LeadDetailPage />} />
         <Route path="imports" element={<ImportPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="settings/email" element={<EmailSettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

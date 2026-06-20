@@ -222,6 +222,19 @@ async function dailyLimit(userId) {
   return { limit, sentToday, remaining: Math.max(0, limit - sentToday) };
 }
 
+async function cooldownDays() {
+  const saved = await prisma.appSetting.findUnique({ where: { key: "emailSending" } });
+  return Number(saved?.value?.cooldownDays || 14);
+}
+
+export async function getDailyLimit(userId) {
+  return dailyLimit(userId);
+}
+
+export async function getCooldownDays() {
+  return cooldownDays();
+}
+
 async function providerSend({ account, token, toEmail, subject, body }) {
   if (account.provider === "GOOGLE") {
     await axios.post(
@@ -261,6 +274,10 @@ export async function sendEmail(userId, input = {}) {
   ]);
   if (!lead) throw notFound("Lead not found");
   if (input.outreachDraftId && (!draft || draft.leadId !== leadId)) throw notFound("Outreach draft not found");
+  const cooldown = await cooldownDays();
+  if (!input.ignoreCooldown && lead.lastEmailSentAt && Date.now() - lead.lastEmailSentAt.getTime() < cooldown * 24 * 60 * 60 * 1000) {
+    throw new HttpError(409, `Lead was contacted recently. Cooldown is ${cooldown} days.`);
+  }
 
   const account = input.emailAccountId
     ? await prisma.emailAccount.findFirst({ where: { id: input.emailAccountId, userId } })
@@ -279,6 +296,7 @@ export async function sendEmail(userId, input = {}) {
       toEmail,
       subject,
       body,
+      mode: input.mode || "MANUAL_APPROVAL",
       status: "PENDING"
     }
   });
@@ -295,7 +313,17 @@ export async function sendEmail(userId, input = {}) {
         await tx.outreachDraft.update({ where: { id: input.outreachDraftId }, data: { status: "SENT" } });
       }
       const current = await tx.lead.findUnique({ where: { id: leadId } });
-      await tx.lead.update({ where: { id: leadId }, data: { pipelineStage: "SENT", status: "CONTACTED", outreachEmail: body } });
+      await tx.lead.update({
+        where: { id: leadId },
+        data: {
+          pipelineStage: "SENT",
+          status: "CONTACTED",
+          emailStatus: "SENT",
+          lastContactedAt: new Date(),
+          lastEmailSentAt: new Date(),
+          outreachEmail: body
+        }
+      });
       await tx.leadStatusHistory.create({
         data: {
           leadId,
@@ -313,7 +341,7 @@ export async function sendEmail(userId, input = {}) {
   } catch (error) {
     const failed = await prisma.emailSend.update({
       where: { id: sendRecord.id },
-      data: { status: "FAILED", errorMessage: error.response?.data?.error?.message || error.message || "Email send failed" },
+      data: { status: "FAILED", mode: input.mode || "MANUAL_APPROVAL", errorMessage: error.response?.data?.error?.message || error.message || "Email send failed" },
       include: { emailAccount: { select: { id: true, provider: true, email: true } } }
     });
     return failed;

@@ -10,7 +10,7 @@ import { formatDate } from "../utils/format.js";
 export default function EmailSettingsPage() {
   const { push } = useToast();
   const [accounts, setAccounts] = useState([]);
-  const [emailSending, setEmailSending] = useState({ dailySendLimit: 25 });
+  const [emailSending, setEmailSending] = useState({ dailySendLimit: 25, cooldownDays: 14 });
   const [loading, setLoading] = useState(true);
 
   async function load() {
@@ -21,7 +21,7 @@ export default function EmailSettingsPage() {
         api.get("/settings")
       ]);
       setAccounts(accountsRes.data);
-      setEmailSending(settingsRes.data.emailSending || { dailySendLimit: 25 });
+      setEmailSending(settingsRes.data.emailSending || { dailySendLimit: 25, cooldownDays: 14 });
     } catch (error) {
       push(error.response?.data?.message || "Could not load email settings", "error");
     } finally {
@@ -96,6 +96,10 @@ export default function EmailSettingsPage() {
           <label>
             <span className="mb-1.5 block text-sm font-medium">Daily send limit</span>
             <Input type="number" min="1" max="500" value={emailSending.dailySendLimit || 25} onChange={(e) => setEmailSending({ ...emailSending, dailySendLimit: e.target.value })} />
+          </label>
+          <label className="mt-3 block">
+            <span className="mb-1.5 block text-sm font-medium">Lead cooldown days</span>
+            <Input type="number" min="1" max="90" value={emailSending.cooldownDays || 14} onChange={(e) => setEmailSending({ ...emailSending, cooldownDays: e.target.value })} />
           </label>
           <Button className="mt-4" variant="secondary" onClick={saveLimit}>Save limit</Button>
         </section>

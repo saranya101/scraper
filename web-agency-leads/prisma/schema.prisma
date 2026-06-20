@@ -105,9 +105,24 @@ enum EmailProvider {
 }
 
 enum EmailSendStatus {
+  DRAFT
   PENDING
   SENT
   FAILED
+  SKIPPED
+}
+
+enum EmailSendMode {
+  MANUAL_APPROVAL
+  AUTO_SEND
+}
+
+enum EmailBulkJobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
 }
 
 model User {
@@ -125,6 +140,7 @@ model User {
   outreachDrafts OutreachDraft[]
   emailAccounts EmailAccount[]
   emailSends EmailSend[]
+  emailBulkJobs EmailBulkJob[]
   automationSchedules AutomationSchedule[]
   automationNotifications AutomationNotification[]
   settingsUpdates AppSetting[]       @relation("SettingUpdater")
@@ -166,6 +182,9 @@ model Lead {
   annualRetainer    Int?
   paymentStatus     String?
   wonAt             DateTime?
+  emailStatus       String?
+  lastContactedAt   DateTime?
+  lastEmailSentAt   DateTime?
   estimatedProjectValue String?
   priority       LeadPriority        @default(COLD)
   outreachEmail  String?             @db.Text
@@ -220,6 +239,9 @@ model Lead {
   @@index([pipelineStage])
   @@index([assignedToUserId])
   @@index([reminderDate])
+  @@index([emailStatus])
+  @@index([lastContactedAt])
+  @@index([lastEmailSentAt])
   @@index([priority])
   @@index([websiteStatus])
   @@index([cms])
@@ -353,6 +375,7 @@ model EmailAccount {
   connectedAt           DateTime      @default(now())
   updatedAt             DateTime      @updatedAt
   sends                 EmailSend[]
+  bulkJobs              EmailBulkJob[]
 
   @@unique([userId, provider, email])
   @@index([userId])
@@ -367,11 +390,12 @@ model EmailSend {
   outreachDraft   OutreachDraft?  @relation(fields: [outreachDraftId], references: [id], onDelete: SetNull)
   userId          String
   user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  emailAccountId  String
-  emailAccount    EmailAccount    @relation(fields: [emailAccountId], references: [id], onDelete: Cascade)
+  emailAccountId  String?
+  emailAccount    EmailAccount?   @relation(fields: [emailAccountId], references: [id], onDelete: SetNull)
   toEmail         String
   subject         String
   body            String          @db.Text
+  mode            EmailSendMode   @default(MANUAL_APPROVAL)
   status          EmailSendStatus @default(PENDING)
   sentAt          DateTime?
   errorMessage    String?         @db.Text
@@ -382,6 +406,28 @@ model EmailSend {
   @@index([emailAccountId])
   @@index([status])
   @@map("email_sends")
+}
+
+model EmailBulkJob {
+  id             String             @id @default(cuid())
+  userId         String
+  user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emailAccountId String?
+  emailAccount   EmailAccount?      @relation(fields: [emailAccountId], references: [id], onDelete: SetNull)
+  mode           EmailSendMode
+  totalLeads     Int
+  sentCount      Int                @default(0)
+  failedCount    Int                @default(0)
+  skippedCount   Int                @default(0)
+  currentLeadId  String?
+  status         EmailBulkJobStatus @default(PENDING)
+  logs           Json?
+  createdAt      DateTime           @default(now())
+  completedAt    DateTime?
+
+  @@index([userId])
+  @@index([status])
+  @@map("email_bulk_jobs")
 }
 
 model Competitor {

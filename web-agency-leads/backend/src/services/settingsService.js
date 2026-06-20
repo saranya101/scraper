@@ -26,7 +26,8 @@ const settingDefaults = {
     meetingBooked: true
   },
   emailSending: {
-    dailySendLimit: 25
+    dailySendLimit: 25,
+    cooldownDays: 14
   }
 };
 

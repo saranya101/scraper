@@ -11,6 +11,7 @@ const navItems = [
   { to: "/", label: "All Leads", icon: BarChart3 },
   { to: "/crm", label: "CRM Pipeline", icon: KanbanSquare },
   { to: "/outreach", label: "Outreach", icon: MailPlus },
+  { to: "/emails", label: "Emails", icon: MailPlus },
   { to: "/analytics", label: "Analytics", icon: ChartNoAxesCombined },
   { to: "/automation", label: "Automation", icon: Clock3 },
   { to: "/workspaces", label: "Workspaces", icon: Layers3 },

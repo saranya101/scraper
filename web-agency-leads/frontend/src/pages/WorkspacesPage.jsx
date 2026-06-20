@@ -3,7 +3,6 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge } from "../components/ui/Badge.jsx";
 import { api } from "../services/api.js";
-import { workspaceNav } from "../utils/workspaces.js";
 
 export default function WorkspacesPage() {
   const [workspaces, setWorkspaces] = useState([]);
@@ -16,8 +15,7 @@ export default function WorkspacesPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  const bySlug = new Map(workspaces.map((workspace) => [workspace.industry.slug, workspace]));
-  const cards = workspaceNav.map((item) => bySlug.get(item.slug) || { industry: item, stats: {} });
+  const cards = workspaces;
 
   return (
     <div className="space-y-6">
@@ -36,7 +34,7 @@ export default function WorkspacesPage() {
               </div>
               <ArrowRight size={18} className="text-slate-300 transition group-hover:translate-x-1 group-hover:text-slate-700" />
             </div>
-            <h2 className="mt-5 text-xl font-semibold tracking-tight">{workspace.industry.name || workspace.industry.label}</h2>
+            <h2 className="mt-5 text-xl font-semibold tracking-tight">{workspace.industry.name}</h2>
             <p className="mt-1 text-sm text-slate-500">{workspace.industry.description || "Focused lead queue, scanner templates, and outreach drafts."}</p>
             <div className="mt-5 grid grid-cols-3 gap-2">
               <div className="rounded-2xl bg-slate-50 p-3">

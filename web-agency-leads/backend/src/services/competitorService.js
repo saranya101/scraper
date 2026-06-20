@@ -85,11 +85,13 @@ async function getLead(leadId) {
 function compareAngle(lead, competitors) {
   if (!competitors.length) return "Find and audit competitors to generate a comparison-based sales angle.";
   const strengths = [...new Set(competitors.flatMap((competitor) => asList(competitor.strengths)))].slice(0, 4);
+  const weaknesses = [...new Set(competitors.flatMap((competitor) => asList(competitor.weaknesses)))].slice(0, 2);
   const topScore = Math.max(...competitors.map((competitor) => Number(competitor.score || 0)));
   const recommendedService = lead.serviceOpportunities?.[0]?.service?.name || "website improvements";
   const leadIssues = lead.issues?.map((issue) => issue.issueText).slice(0, 2).join(", ");
   const advantage = strengths.length ? strengths.join(", ").toLowerCase() : "stronger trust signals and clearer conversion paths";
-  return `Your competitors are scoring up to ${topScore}/10 and show ${advantage}. Your site can close that gap with ${recommendedService}${leadIssues ? `, especially around ${leadIssues}` : ""}.`;
+  const competitorGap = weaknesses.length ? ` Even where competitors are imperfect (${weaknesses.join(", ").toLowerCase()}), they still create useful benchmarks.` : "";
+  return `Your competitors are scoring up to ${topScore}/10 and show ${advantage}. ${lead.company} can close that gap with ${recommendedService}${leadIssues ? `, especially around ${leadIssues}` : ""}.${competitorGap} The strongest outreach angle is to position this as a practical way to match local buyer expectations and turn more website visits into enquiries.`;
 }
 
 export async function listCompetitors(leadId) {

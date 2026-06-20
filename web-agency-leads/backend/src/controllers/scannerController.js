@@ -4,12 +4,24 @@ export async function run(req, res) {
   res.status(201).json(await scannerService.runScan(req.body, req.user.id));
 }
 
+export async function runDirect(req, res) {
+  res.status(201).json(await scannerService.runDirectScan(req.body, req.user.id));
+}
+
+export async function runBulk(req, res) {
+  res.status(201).json(await scannerService.runBulkScan(req.body, req.user.id));
+}
+
 export async function history(_req, res) {
   res.json(await scannerService.getHistory());
 }
 
 export async function job(req, res) {
   res.json(await scannerService.getScanJob(req.params.id));
+}
+
+export async function progress(req, res) {
+  res.json(await scannerService.getScanProgress(req.params.id));
 }
 
 export async function results(req, res) {

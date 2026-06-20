@@ -12,3 +12,12 @@ export async function create(req, res) {
 export async function list(req, res) {
   res.json(await leadService.listNotes(req.params.leadId));
 }
+
+export async function update(req, res) {
+  res.json(await leadService.updateNote(req.params.id, req.user.id, req.body.note));
+}
+
+export async function remove(req, res) {
+  await leadService.deleteNote(req.params.id);
+  res.status(204).send();
+}

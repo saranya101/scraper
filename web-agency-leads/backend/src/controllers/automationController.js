@@ -21,6 +21,30 @@ export async function run(req, res) {
   res.status(202).json(await automationService.runSchedule(req.params.id, req.user.id));
 }
 
+export async function pause(req, res) {
+  res.json(await automationService.pauseSchedule(req.params.id, req.user.id));
+}
+
+export async function finish(req, res) {
+  res.json(await automationService.finishSchedule(req.params.id, req.user.id));
+}
+
+export async function dashboard(req, res) {
+  res.json(await automationService.getDashboard(req.user.id));
+}
+
+export async function performance(req, res) {
+  res.json(await automationService.getPerformance(req.user.id));
+}
+
+export async function diagnostics(req, res) {
+  res.json(await automationService.getDiagnostics(req.user.id));
+}
+
+export async function runProgress(req, res) {
+  res.json(await automationService.getRunProgress(req.params.id, req.user.id));
+}
+
 export async function notifications(req, res) {
   res.json(await automationService.listNotifications(req.user.id));
 }

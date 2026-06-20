@@ -40,6 +40,10 @@ export async function bulkUpdate(req, res) {
   res.json(await leadService.bulkUpdate(req.body, req.user.id));
 }
 
+export async function bulkDelete(req, res) {
+  res.json(await leadService.bulkDelete(req.body));
+}
+
 export async function remove(req, res) {
   await leadService.deleteLead(req.params.id);
   res.status(204).send();

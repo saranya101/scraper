@@ -10,6 +10,7 @@ import leadRoutes from "./leadRoutes.js";
 import noteRoutes from "./noteRoutes.js";
 import outreachRoutes from "./outreachRoutes.js";
 import scannerRoutes from "./scannerRoutes.js";
+import settingsRoutes from "./settingsRoutes.js";
 import workspaceRoutes from "./workspaceRoutes.js";
 
 const router = Router();
@@ -24,6 +25,7 @@ router.use("/leads", requireAuth, leadRoutes);
 router.use("/notes", requireAuth, noteRoutes);
 router.use("/outreach", requireAuth, outreachRoutes);
 router.use("/scanner", requireAuth, scannerRoutes);
+router.use("/settings", requireAuth, settingsRoutes);
 router.use("/imports", requireAuth, importRoutes);
 router.use("/workspaces", requireAuth, workspaceRoutes);
 

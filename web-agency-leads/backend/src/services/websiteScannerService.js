@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { normalizeWebsiteRoot } from "../utils/priority.js";
-import { extractPageData } from "./extractionService.js";
+import { extractPageData, mergeExtractedData } from "./extractionService.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsDir = path.resolve(__dirname, "../../uploads");
@@ -76,11 +76,21 @@ export async function scanWebsite(browser, business, scanJobId, scanDepth = "QUI
     const loadTime = Date.now() - startedAt;
     await sleep(scanDepth === "QUICK" ? 800 : 1500);
     const statusCode = response?.status() || null;
-    const extracted = await extractPageData(page, website, scanDepth).catch(() => ({ visibleText: "" }));
+    let extracted = await extractPageData(page, website, scanDepth).catch(() => ({ visibleText: "" }));
     await page.screenshot({ path: desktopFile, type: "jpeg", quality: 62, fullPage: scanDepth === "DEEP" });
     await page.setViewportSize({ width: 390, height: 844 });
     await sleep(500);
     await page.screenshot({ path: mobileFile, type: "jpeg", quality: 62, fullPage: scanDepth === "DEEP" });
+    if (extracted.contactPageUrl) {
+      try {
+        await page.goto(extracted.contactPageUrl, { waitUntil: "domcontentloaded", timeout: 12000 });
+        await sleep(500);
+        const contactExtracted = await extractPageData(page, extracted.contactPageUrl, scanDepth);
+        extracted = mergeExtractedData(extracted, contactExtracted);
+      } catch {
+        extracted = mergeExtractedData(extracted, null);
+      }
+    }
     const access = classifyAccess({ url: website, statusCode, text: extracted.visibleText });
     return {
       ...access,

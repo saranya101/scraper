@@ -1,17 +1,27 @@
 import { motion } from "framer-motion";
 import { AlertTriangle, CheckCircle2, CopyPlus, History, Play, RefreshCw, Save, Search, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Badge } from "../components/ui/Badge.jsx";
 import { Button } from "../components/ui/Button.jsx";
-import { Input, Select } from "../components/ui/Input.jsx";
+import { Input, Select, Textarea } from "../components/ui/Input.jsx";
 import { useToast } from "../hooks/useToast.jsx";
 import { api } from "../services/api.js";
 import { domain, formatDate, priorities, websiteStatuses } from "../utils/format.js";
+import { exclusionKeywords, exclusionOptions, industryProfiles, profileBySlug } from "../utils/industryProfiles.js";
 import { workspaceLabel } from "../utils/workspaces.js";
 
+const defaultProfile = profileBySlug("beauty-aesthetics");
+
 const initialForm = {
-  keyword: "aesthetic clinic",
+  industrySlug: defaultProfile.slug,
+  industryName: defaultProfile.name,
+  keyword: defaultProfile.keywords,
+  scanMode: "GOOGLE_PLACES",
+  websiteUrl: "",
+  bulkUrls: "",
+  company: "",
+  keywordsEdited: false,
   services: "",
   country: "Singapore",
   state: "",
@@ -23,6 +33,7 @@ const initialForm = {
   hasWebsiteOnly: true,
   includeKeywords: "",
   excludeKeywords: "",
+  exclusions: ["universities", "government", "directories", "agencies", "social_only"],
   minimumScore: "",
   priority: "",
   websiteStatus: ""
@@ -34,13 +45,24 @@ export default function ScannerPage() {
   const industrySlug = searchParams.get("industry") || "";
   const industryName = searchParams.get("name") || workspaceLabel(industrySlug, "");
   const templateId = searchParams.get("templateId") || "";
+  const initialProfile = profileBySlug(industrySlug || initialForm.industrySlug);
   const [form, setForm] = useState(() => ({
     ...initialForm,
-    ...(industryName ? { keyword: industryName } : {}),
-    industrySlug
+    industrySlug: initialProfile.slug,
+    industryName: industryName || initialProfile.name,
+    keyword: initialProfile.keywords
   }));
+  const [summary, setSummary] = useState({
+    businessesFound: 0,
+    websitesAudited: 0,
+    qualifiedLeads: 0,
+    importedLeads: 0,
+    avgOpportunity: 0,
+    estimatedPipelineGenerated: 0
+  });
   const [history, setHistory] = useState([]);
   const [templates, setTemplates] = useState([]);
+  const [industryOptions, setIndustryOptions] = useState(industryProfiles);
   const [activeJob, setActiveJob] = useState(null);
   const [results, setResults] = useState([]);
   const [selected, setSelected] = useState([]);
@@ -65,22 +87,39 @@ export default function ScannerPage() {
     if (!scanId) return;
     const params = Object.fromEntries(Object.entries(filters).filter(([, value]) => value));
     const { data } = await api.get(`/scanner/results/${scanId}`, { params });
-    setResults(data);
+    if (Array.isArray(data)) {
+      setResults(data);
+      return;
+    }
+    setResults(data.items || []);
+    setSummary(data.summary || summary);
   }
 
   useEffect(() => {
     loadHistory().catch(() => {});
     loadTemplates().catch(() => {});
+    api.get("/leads/meta/catalog")
+      .then(({ data }) => {
+        const options = (data.industries || []).map((industry) => ({
+          slug: industry.slug,
+          name: industry.name,
+          keywords: industry.defaultKeywords || profileBySlug(industry.slug).keywords
+        }));
+        if (options.length) setIndustryOptions(options);
+      })
+      .catch(() => {});
   }, [industrySlug]);
 
   useEffect(() => {
     if (templateId) return;
+    const profile = industryOptions.find((item) => item.slug === (industrySlug || form.industrySlug)) || profileBySlug(industrySlug || form.industrySlug);
     setForm((current) => ({
       ...current,
-      ...(industryName ? { keyword: industryName } : {}),
-      industrySlug
+      industrySlug: profile.slug,
+      industryName: industryName || profile.name,
+      ...(current.keywordsEdited ? {} : { keyword: profile.keywords })
     }));
-  }, [industrySlug, industryName, templateId]);
+  }, [industrySlug, industryName, templateId, industryOptions.length]);
 
   useEffect(() => {
     if (!templateId || !templates.length) return;
@@ -98,7 +137,8 @@ export default function ScannerPage() {
       const { data } = await api.get("/scanner/history");
       setHistory(data);
       const refreshed = data.find((job) => job.id === activeJob.id);
-      if (refreshed) setActiveJob(refreshed);
+      const progressRes = await api.get(`/scanner/job/${activeJob.id}/progress`).catch(() => null);
+      if (refreshed) setActiveJob({ ...refreshed, ...(progressRes?.data || {}) });
       await loadResults(activeJob.id);
       if (refreshed && !["QUEUED", "RUNNING", "PENDING"].includes(refreshed.status)) setRunning(false);
     }, 2500);
@@ -110,26 +150,44 @@ export default function ScannerPage() {
     setRunning(true);
     setSelected([]);
     try {
-      const { data } = await api.post("/scanner/run", {
-        keyword: form.keyword,
+      const basePayload = {
+        industrySlug: form.industrySlug,
+        industryName: form.industryName,
         services: form.services,
-        location: form.location,
-        country: form.country,
-        state: form.state,
-        city: form.city,
-        maxResults: Number(form.maxResults),
         scanDepth: form.scanDepth,
-        minReviews: form.minReviews === "" ? undefined : Number(form.minReviews),
-        hasWebsiteOnly: form.hasWebsiteOnly,
-        filters: {
-          industrySlug,
-          includeKeywords: form.includeKeywords,
-          excludeKeywords: form.excludeKeywords,
-          minimumScore: form.minimumScore ? Number(form.minimumScore) : undefined,
-          priority: form.priority,
-          websiteStatus: form.websiteStatus
-        }
-      });
+        location: form.location || [form.city, form.state, form.country].filter(Boolean).join(", ")
+      };
+      const { data } = form.scanMode === "SINGLE_WEBSITE"
+        ? await api.post("/scanner/run-direct", {
+            ...basePayload,
+            websiteUrl: form.websiteUrl,
+            company: form.company
+          })
+        : form.scanMode === "BULK_WEBSITE"
+          ? await api.post("/scanner/run-bulk", {
+              ...basePayload,
+              websites: form.bulkUrls
+            })
+          : await api.post("/scanner/run", {
+              ...basePayload,
+              keyword: form.keyword,
+              keywordsEdited: form.keywordsEdited,
+              exclusions: form.exclusions,
+              country: form.country,
+              state: form.state,
+              city: form.city,
+              maxResults: Number(form.maxResults),
+              minReviews: form.minReviews === "" ? undefined : Number(form.minReviews),
+              hasWebsiteOnly: form.hasWebsiteOnly,
+              filters: {
+                industrySlug: form.industrySlug,
+                includeKeywords: form.includeKeywords,
+                excludeKeywords: form.excludeKeywords,
+                minimumScore: form.minimumScore ? Number(form.minimumScore) : undefined,
+                priority: form.priority,
+                websiteStatus: form.websiteStatus
+              }
+            });
       setActiveJob(data);
       push("Scan started");
       await loadHistory();
@@ -144,7 +202,7 @@ export default function ScannerPage() {
   async function saveTemplate() {
     const templateLocation = [form.city, form.state, form.country].filter(Boolean).join(", ") || form.location;
     await api.post("/scanner/templates", {
-      name: `${form.keyword} · ${templateLocation}`,
+      name: `${form.industryName} · ${templateLocation}`,
       keyword: form.keyword,
       location: form.location,
       country: form.country,
@@ -152,8 +210,8 @@ export default function ScannerPage() {
       city: form.city,
       maxResults: Number(form.maxResults),
       filters: form
-        ? { ...form, industrySlug }
-        : { industrySlug }
+        ? { ...form, industrySlug: form.industrySlug, industryName: form.industryName }
+        : { industrySlug: form.industrySlug, industryName: form.industryName }
     });
     push("Template saved");
     loadTemplates();
@@ -196,7 +254,33 @@ export default function ScannerPage() {
     setSelected((items) => (items.includes(id) ? items.filter((item) => item !== id) : [...items, id]));
   }
 
+  function updateIndustry(slug) {
+    const profile = industryOptions.find((item) => item.slug === slug) || profileBySlug(slug);
+    setForm((current) => ({
+      ...current,
+      industrySlug: profile.slug,
+      industryName: profile.name,
+      keyword: profile.keywords,
+      keywordsEdited: false
+    }));
+  }
+
+  function toggleExclusion(value) {
+    setForm((current) => {
+      const exclusions = current.exclusions || [];
+      return {
+        ...current,
+        exclusions: exclusions.includes(value)
+          ? exclusions.filter((item) => item !== value)
+          : [...exclusions, value]
+      };
+    });
+  }
+
   const logs = useMemo(() => (Array.isArray(activeJob?.logs) ? activeJob.logs : []), [activeJob]);
+  const activeProfile = industryOptions.find((item) => item.slug === form.industrySlug) || profileBySlug(form.industrySlug);
+  const selectedExclusionText = exclusionKeywords(form.exclusions || []);
+  const money = (value) => `$${Number(value || 0).toLocaleString()}`;
 
   return (
     <div className="space-y-6">
@@ -211,6 +295,22 @@ export default function ScannerPage() {
         <Button onClick={importSelected} disabled={!selected.length}><CopyPlus size={16} /> Import selected ({selected.length})</Button>
       </div>
 
+      <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+        {[
+          ["Businesses found", summary.businessesFound],
+          ["Websites audited", summary.websitesAudited],
+          ["Qualified leads", summary.qualifiedLeads],
+          ["Imported leads", summary.importedLeads],
+          ["Avg opportunity", `${summary.avgOpportunity || 0}/10`],
+          ["Pipeline generated", money(summary.estimatedPipelineGenerated)]
+        ].map(([label, value]) => (
+          <div key={label} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</p>
+            <p className="mt-2 text-2xl font-semibold tracking-tight">{value}</p>
+          </div>
+        ))}
+      </div>
+
       <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
         <motion.form initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} onSubmit={runScan} className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="mb-5 flex items-center justify-between">
@@ -220,25 +320,83 @@ export default function ScannerPage() {
             </div>
             <div className="grid h-11 w-11 place-items-center rounded-2xl bg-slate-950 text-white"><Sparkles size={20} /></div>
           </div>
+          <div className="mb-5 grid gap-2 rounded-2xl bg-slate-100 p-1 md:grid-cols-3">
+            {[
+              ["GOOGLE_PLACES", "Google Places Scan"],
+              ["SINGLE_WEBSITE", "Single Website Scan"],
+              ["BULK_WEBSITE", "Bulk Website Scan"]
+            ].map(([mode, label]) => (
+              <button key={mode} type="button" onClick={() => setForm({ ...form, scanMode: mode })} className={`rounded-xl px-3 py-2 text-sm font-semibold transition ${form.scanMode === mode ? "bg-white shadow-sm" : "text-slate-500 hover:bg-white/70"}`}>
+                {label}
+              </button>
+            ))}
+          </div>
           <div className="grid gap-4 md:grid-cols-2">
-            <label><span className="mb-1.5 block text-sm font-medium">Industry / keyword</span><Input value={form.keyword} onChange={(e) => setForm({ ...form, keyword: e.target.value })} required /></label>
+            <label>
+              <span className="mb-1.5 block text-sm font-medium">Industry</span>
+              <Select value={form.industrySlug} onChange={(e) => updateIndustry(e.target.value)}>
+                {industryOptions.map((profile) => <option key={profile.slug} value={profile.slug}>{profile.name}</option>)}
+              </Select>
+            </label>
             <label><span className="mb-1.5 block text-sm font-medium">Services</span><Input value={form.services} onChange={(e) => setForm({ ...form, services: e.target.value })} placeholder="SEO, booking, redesign" /></label>
+            {form.scanMode === "GOOGLE_PLACES" && (
+              <label className="md:col-span-2">
+                <span className="mb-1.5 block text-sm font-medium">Keywords</span>
+                <Input value={form.keyword} onChange={(e) => setForm({ ...form, keyword: e.target.value, keywordsEdited: true })} required />
+              </label>
+            )}
+            {form.scanMode === "SINGLE_WEBSITE" && (
+              <>
+                <label><span className="mb-1.5 block text-sm font-medium">Website URL</span><Input value={form.websiteUrl} onChange={(e) => setForm({ ...form, websiteUrl: e.target.value })} placeholder="https://example.com" required /></label>
+                <label><span className="mb-1.5 block text-sm font-medium">Company name optional</span><Input value={form.company} onChange={(e) => setForm({ ...form, company: e.target.value })} placeholder="Optional" /></label>
+              </>
+            )}
+            {form.scanMode === "BULK_WEBSITE" && (
+              <label className="md:col-span-2">
+                <span className="mb-1.5 block text-sm font-medium">Website URLs</span>
+                <Textarea className="min-h-40 font-mono" value={form.bulkUrls} onChange={(e) => setForm({ ...form, bulkUrls: e.target.value })} placeholder={"https://example.com\nhttps://another-site.com"} required />
+              </label>
+            )}
+            {form.scanMode === "GOOGLE_PLACES" && (
+              <>
             <label><span className="mb-1.5 block text-sm font-medium">Country</span><Input value={form.country} onChange={(e) => setForm({ ...form, country: e.target.value })} /></label>
             <label><span className="mb-1.5 block text-sm font-medium">State</span><Input value={form.state} onChange={(e) => setForm({ ...form, state: e.target.value })} placeholder="Optional" /></label>
             <label><span className="mb-1.5 block text-sm font-medium">City</span><Input value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} placeholder="Optional" /></label>
             <label><span className="mb-1.5 block text-sm font-medium">Fallback location</span><Input value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="Used if city/country are blank" /></label>
             <label><span className="mb-1.5 block text-sm font-medium">Max results</span><Input type="number" min="1" max="100" value={form.maxResults} onChange={(e) => setForm({ ...form, maxResults: e.target.value })} /></label>
+              </>
+            )}
             <label><span className="mb-1.5 block text-sm font-medium">Scan depth</span><Select value={form.scanDepth} onChange={(e) => setForm({ ...form, scanDepth: e.target.value })}><option value="QUICK">Quick</option><option value="FULL">Full</option><option value="DEEP">Deep</option></Select></label>
+            {form.scanMode === "GOOGLE_PLACES" && (
+              <>
             <label><span className="mb-1.5 block text-sm font-medium">Min Google reviews</span><Input type="number" min="0" value={form.minReviews} onChange={(e) => setForm({ ...form, minReviews: e.target.value })} placeholder="0" /></label>
             <label><span className="mb-1.5 block text-sm font-medium">Minimum score</span><Input type="number" min="1" max="10" value={form.minimumScore} onChange={(e) => setForm({ ...form, minimumScore: e.target.value })} placeholder="Optional" /></label>
             <label><span className="mb-1.5 block text-sm font-medium">Include keywords</span><Input value={form.includeKeywords} onChange={(e) => setForm({ ...form, includeKeywords: e.target.value })} placeholder="Comma separated" /></label>
-            <label><span className="mb-1.5 block text-sm font-medium">Exclude keywords</span><Input value={form.excludeKeywords} onChange={(e) => setForm({ ...form, excludeKeywords: e.target.value })} placeholder="Comma separated" /></label>
+            <label><span className="mb-1.5 block text-sm font-medium">Manual exclude keywords</span><Input value={form.excludeKeywords} onChange={(e) => setForm({ ...form, excludeKeywords: e.target.value })} placeholder="Comma separated" /></label>
+            <details className="rounded-xl border border-slate-200 px-3 py-2 md:col-span-2">
+              <summary className="cursor-pointer text-sm font-medium">Exclusion presets ({form.exclusions?.length || 0})</summary>
+              <div className="mt-3 grid gap-2 md:grid-cols-2">
+                {exclusionOptions.map((option) => (
+                  <label key={option.value} className="flex items-center gap-3 rounded-xl bg-slate-50 px-3 py-2 text-sm">
+                    <input type="checkbox" checked={(form.exclusions || []).includes(option.value)} onChange={() => toggleExclusion(option.value)} className="h-4 w-4 rounded border-slate-300" />
+                    {option.label}
+                  </label>
+                ))}
+              </div>
+              {selectedExclusionText && <p className="mt-3 text-xs text-slate-400">Blocks: {selectedExclusionText}</p>}
+            </details>
             <label><span className="mb-1.5 block text-sm font-medium">Priority filter</span><Select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}><option value="">Any</option><option value="HOT">HOT</option><option value="WARM">WARM</option><option value="COLD">COLD</option></Select></label>
             <label><span className="mb-1.5 block text-sm font-medium">Website status</span><Select value={form.websiteStatus} onChange={(e) => setForm({ ...form, websiteStatus: e.target.value })}><option value="">Any</option>{Object.entries(websiteStatuses).map(([key, item]) => <option key={key} value={key}>{item.label}</option>)}</Select></label>
             <label className="flex items-center gap-3 rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium">
               <input type="checkbox" checked={form.hasWebsiteOnly} onChange={(e) => setForm({ ...form, hasWebsiteOnly: e.target.checked })} className="h-4 w-4 rounded border-slate-300" />
               Has website only
             </label>
+              </>
+            )}
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm md:col-span-2">
+              <p className="font-semibold text-slate-800">Audit focus for {activeProfile.name}</p>
+              <p className="mt-1 text-slate-500">{activeProfile.auditFocus}</p>
+            </div>
           </div>
           <div className="mt-6 flex flex-wrap gap-3">
             <Button disabled={running}><Play size={16} /> {running ? "Running scan..." : "Run Scan"}</Button>
@@ -252,9 +410,27 @@ export default function ScannerPage() {
             {activeJob && <Badge className="bg-slate-100 text-slate-700 ring-slate-200">{activeJob.status}</Badge>}
           </div>
           <div className="h-3 overflow-hidden rounded-full bg-slate-100">
-            <div className="h-full rounded-full bg-slate-950 transition-all" style={{ width: `${activeJob?.progress || 0}%` }} />
+            <div className="h-full rounded-full bg-slate-950 transition-all" style={{ width: `${activeJob?.progressPercent ?? activeJob?.progress ?? 0}%` }} />
           </div>
-          <p className="mt-2 text-sm text-slate-500">{activeJob?.progress || 0}% complete · {activeJob?._count?.results || 0} saved results</p>
+          <p className="mt-2 text-sm text-slate-500">{activeJob?.progressPercent ?? activeJob?.progress ?? 0}% complete · {activeJob?._count?.results || 0} saved results</p>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <div className="rounded-2xl bg-slate-50 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Current stage</p>
+              <p className="mt-1 font-semibold">{activeJob?.currentStage || "Queued"}</p>
+            </div>
+            <div className="rounded-2xl bg-slate-50 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Current URL</p>
+              <p className="mt-1 truncate font-semibold">{activeJob?.currentUrl || "-"}</p>
+            </div>
+            <div className="rounded-2xl bg-slate-50 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Completed / total</p>
+              <p className="mt-1 font-semibold">{activeJob?.completedItems || 0} / {activeJob?.totalItems || 0}</p>
+            </div>
+            <div className="rounded-2xl bg-slate-50 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Failed / ETA</p>
+              <p className="mt-1 font-semibold">{activeJob?.failedItems || 0} failed · {activeJob?.estimatedSecondsRemaining ? `${activeJob.estimatedSecondsRemaining}s left` : "ETA pending"}</p>
+            </div>
+          </div>
           <div className="mt-5 max-h-72 space-y-2 overflow-auto rounded-2xl bg-slate-950 p-4 text-sm text-slate-200">
             {logs.length ? logs.map((log, index) => <p key={index}><span className="text-slate-500">{formatDate(log.at)}</span> {log.message}</p>) : <p className="text-slate-500">No scan logs yet.</p>}
           </div>
@@ -335,7 +511,11 @@ export default function ScannerPage() {
                   <div className="flex gap-3">
                     <input type="checkbox" checked={selected.includes(result.id)} onChange={() => toggle(result.id)} className="mt-1 h-4 w-4 rounded border-slate-300" />
                     <div>
-                      <h3 className="font-semibold">{result.company}</h3>
+                      {result.leadId ? (
+                        <Link to={`/leads/${result.leadId}`} className="font-semibold hover:text-slate-950">{result.company}</Link>
+                      ) : (
+                        <h3 className="font-semibold">{result.company}</h3>
+                      )}
                       <p className="text-sm text-slate-500">{result.website ? domain(result.website) : "No website"} · {result.location}</p>
                       <p className="mt-2 text-sm text-slate-600">{(Array.isArray(result.issues) ? result.issues : []).slice(0, 2).join(" · ") || "No issues returned yet."}</p>
                     </div>

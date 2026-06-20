@@ -6,7 +6,7 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 
 const router = Router();
 
-const outreachType = z.enum(["EMAIL", "LINKEDIN_DM", "FOLLOW_UP_1", "FOLLOW_UP_2"]);
+const outreachType = z.enum(["EMAIL", "LINKEDIN_DM", "COLD_CALL", "FOLLOW_UP_1", "FOLLOW_UP_2"]);
 const draftStatus = z.enum(["DRAFT", "SAVED", "COPIED", "SENT", "ARCHIVED"]);
 
 const draftBody = z.object({

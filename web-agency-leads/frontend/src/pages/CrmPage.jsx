@@ -1,4 +1,4 @@
-import { Bell, CheckSquare, Clock3, Filter, GripVertical, Save, UserRound } from "lucide-react";
+import { Archive, Bell, CheckSquare, Clock3, Filter, GripVertical, KanbanSquare, List, Save, Trash2, UserRound } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge } from "../components/ui/Badge.jsx";
@@ -8,7 +8,7 @@ import { useToast } from "../hooks/useToast.jsx";
 import { api } from "../services/api.js";
 import { domain, formatDate, pipelineStageOrder, pipelineStages, priorities } from "../utils/format.js";
 
-const baseFilters = { assignedToUserId: "", industry: "", recommendedServiceId: "", priority: "", reminders: "" };
+const baseFilters = { assignedToUserId: "", industryId: "", recommendedServiceId: "", priority: "", reminders: "" };
 
 function reminderState(date) {
   if (!date) return null;
@@ -44,6 +44,7 @@ export default function CrmPage() {
   const [viewName, setViewName] = useState("");
   const [draggingId, setDraggingId] = useState("");
   const [loading, setLoading] = useState(true);
+  const [view, setView] = useState("kanban");
 
   const params = useMemo(() => Object.fromEntries(Object.entries(filters).filter(([, value]) => value)), [filters]);
 
@@ -135,6 +136,23 @@ export default function CrmPage() {
     await loadCrm();
   }
 
+  async function bulkArchive() {
+    if (!selected.length) return push("Select leads first", "error");
+    const { data } = await api.put("/leads/bulk", { leadIds: selected, status: "ARCHIVED" });
+    push(`Archived ${data.updated} leads`);
+    setSelected([]);
+    await loadCrm();
+  }
+
+  async function bulkDelete() {
+    if (!selected.length) return push("Select leads first", "error");
+    if (!confirm(`Delete ${selected.length} selected leads?`)) return;
+    const { data } = await api.delete("/leads/bulk", { data: { leadIds: selected } });
+    push(`Deleted ${data.deleted} leads`);
+    setSelected([]);
+    await loadCrm();
+  }
+
   function saveView() {
     const name = viewName.trim();
     if (!name) return;
@@ -150,6 +168,7 @@ export default function CrmPage() {
   }
 
   const totalLeads = columns.reduce((sum, column) => sum + column.leads.length, 0);
+  const allLeads = columns.flatMap((column) => column.leads.map((lead) => ({ ...lead, pipelineStage: column.stage })));
 
   return (
     <div className="space-y-6">
@@ -159,9 +178,15 @@ export default function CrmPage() {
           <h1 className="mt-2 text-3xl font-semibold tracking-tight md:text-4xl">Sales board</h1>
           <p className="mt-2 max-w-2xl text-slate-500">Move leads from first draft to won work, assign owners, and keep follow-ups visible.</p>
         </div>
-        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Visible pipeline</p>
-          <p className="mt-1 text-2xl font-semibold">{totalLeads} leads</p>
+        <div className="flex items-center gap-3">
+          <div className="flex rounded-lg bg-slate-100 p-1">
+            <button onClick={() => setView("kanban")} className={`rounded-md p-2 ${view === "kanban" ? "bg-white shadow-sm" : "text-slate-500"}`} aria-label="Kanban view"><KanbanSquare size={16} /></button>
+            <button onClick={() => setView("table")} className={`rounded-md p-2 ${view === "table" ? "bg-white shadow-sm" : "text-slate-500"}`} aria-label="Table view"><List size={16} /></button>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Visible pipeline</p>
+            <p className="mt-1 text-2xl font-semibold">{totalLeads} leads</p>
+          </div>
         </div>
       </div>
 
@@ -173,9 +198,9 @@ export default function CrmPage() {
             <option value="unassigned">Unassigned</option>
             {catalog.users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
           </Select>
-          <Select value={filters.industry} onChange={(e) => setFilters({ ...filters, industry: e.target.value })}>
+          <Select value={filters.industryId} onChange={(e) => setFilters({ ...filters, industryId: e.target.value })}>
             <option value="">All industries</option>
-            {catalog.industries.map((industry) => <option key={industry.id} value={industry.name}>{industry.name}</option>)}
+            {catalog.industries.map((industry) => <option key={industry.id} value={industry.id}>{industry.name}</option>)}
           </Select>
           <Select value={filters.recommendedServiceId} onChange={(e) => setFilters({ ...filters, recommendedServiceId: e.target.value })}>
             <option value="">All services</option>
@@ -207,7 +232,7 @@ export default function CrmPage() {
 
       {selected.length > 0 && (
         <div className="sticky top-20 z-10 rounded-2xl border border-slate-200 bg-white p-3 shadow-soft">
-          <div className="grid gap-3 md:grid-cols-[auto_1fr_1fr_1fr_auto] md:items-center">
+          <div className="grid gap-3 md:grid-cols-[auto_1fr_1fr_1fr_auto_auto_auto] md:items-center">
             <p className="flex items-center gap-2 text-sm font-semibold"><CheckSquare size={16} /> {selected.length} selected</p>
             <Select value={bulkStage} onChange={(e) => setBulkStage(e.target.value)}>
               <option value="">Keep stage</option>
@@ -220,11 +245,49 @@ export default function CrmPage() {
             </Select>
             <Input type="datetime-local" value={bulkReminder} onChange={(e) => setBulkReminder(e.target.value)} />
             <Button onClick={applyBulkUpdate}>Apply bulk update</Button>
+            <Button variant="secondary" onClick={bulkArchive}><Archive size={16} /> Archive</Button>
+            <Button variant="danger" onClick={bulkDelete}><Trash2 size={16} /> Delete</Button>
           </div>
         </div>
       )}
 
-      <div className="space-y-6">
+      {view === "table" ? (
+        <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[980px] text-left text-sm">
+              <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="px-4 py-3"></th>
+                  <th className="px-4 py-3">Lead</th>
+                  <th className="px-4 py-3">Stage</th>
+                  <th className="px-4 py-3">Industry</th>
+                  <th className="px-4 py-3">Service</th>
+                  <th className="px-4 py-3">Value</th>
+                  <th className="px-4 py-3">Owner</th>
+                  <th className="px-4 py-3">Score</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {allLeads.map((lead) => (
+                  <tr key={lead.id} className="hover:bg-slate-50/80">
+                    <td className="px-4 py-3"><input type="checkbox" checked={selected.includes(lead.id)} onChange={() => toggleLead(lead.id)} /></td>
+                    <td className="px-4 py-3">
+                      <Link to={`/leads/${lead.id}`} className="font-semibold text-slate-950 hover:underline">{lead.company}</Link>
+                      <a href={lead.website} target="_blank" rel="noreferrer" className="mt-1 block text-xs text-slate-500">{domain(lead.website)}</a>
+                    </td>
+                    <td className="px-4 py-3"><Badge className={pipelineStages[lead.pipelineStage]?.className}>{pipelineStages[lead.pipelineStage]?.label}</Badge></td>
+                    <td className="px-4 py-3 text-slate-600">{lead.industryRef?.name || lead.industry || "-"}</td>
+                    <td className="px-4 py-3 text-slate-600">{lead.serviceOpportunities?.[0]?.service?.name || "-"}</td>
+                    <td className="px-4 py-3 text-slate-600">{lead.serviceOpportunities?.[0] ? `$${lead.serviceOpportunities[0].estimatedMinValue.toLocaleString()} - $${lead.serviceOpportunities[0].estimatedMaxValue.toLocaleString()}` : lead.estimatedProjectValue || "-"}</td>
+                    <td className="px-4 py-3 text-slate-600">{lead.assignedTo?.name || "Unassigned"}</td>
+                    <td className="px-4 py-3 font-semibold">{lead.score}/10</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : <div className="space-y-6">
         <div className="-mx-4 overflow-x-auto px-4 pb-3 md:-mx-8 md:px-8">
           <div className="flex min-w-max gap-4">
             {pipelineStageOrder.map((stage) => {
@@ -271,7 +334,7 @@ export default function CrmPage() {
                           <Badge className={priorities[lead.priority]?.className}>{priorities[lead.priority]?.label}</Badge>
                           {lead.reminderDate && <Badge className={new Date(lead.reminderDate) <= new Date() ? "bg-rose-50 text-rose-700 ring-rose-200" : "bg-amber-50 text-amber-700 ring-amber-200"}><Bell size={12} /> {reminderState(lead.reminderDate)}</Badge>}
                         </div>
-                        <p className="mb-3 text-sm text-slate-500">{lead.industry || "No industry"} · {lead.serviceOpportunities?.[0]?.service?.name || "No service"}</p>
+                        <p className="mb-3 text-sm text-slate-500">{lead.industryRef?.name || lead.industry || "No industry"} · {lead.serviceOpportunities?.[0]?.service?.name || "No service"}</p>
                         <div className="space-y-2">
                           <Select value={lead.assignedToUserId || ""} onChange={(e) => assignLead(lead.id, e.target.value)}>
                             <option value="">Unassigned</option>
@@ -312,7 +375,7 @@ export default function CrmPage() {
             </div>
           </section>
         </aside>
-      </div>
+      </div>}
 
       {loading && <p className="text-sm text-slate-500">Refreshing pipeline...</p>}
     </div>

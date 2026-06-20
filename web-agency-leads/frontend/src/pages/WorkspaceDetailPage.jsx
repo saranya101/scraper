@@ -1,4 +1,4 @@
-import { ArrowRight, FileText, Play, Send, Sparkles } from "lucide-react";
+import { ArrowRight, FileText, Gauge, Play, Send, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Badge } from "../components/ui/Badge.jsx";
@@ -17,6 +17,14 @@ const statCards = [
   ["replied", "Replied"]
 ];
 
+const healthLabels = [
+  ["leadQuality", "Lead quality"],
+  ["outreachCoverage", "Outreach coverage"],
+  ["pipelineHealth", "Pipeline health"],
+  ["responseRate", "Response rate"],
+  ["revenuePotential", "Revenue potential"]
+];
+
 export default function WorkspaceDetailPage() {
   const { industrySlug } = useParams();
   const navigate = useNavigate();
@@ -32,6 +40,7 @@ export default function WorkspaceDetailPage() {
   }, [industrySlug]);
 
   const industry = workspace?.industry || { name: workspaceLabel(industrySlug), slug: industrySlug };
+  const sections = workspace?.workspaceSections || {};
 
   function runIndustryScan(template) {
     const query = new URLSearchParams({
@@ -60,17 +69,40 @@ export default function WorkspaceDetailPage() {
         </div>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+      <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="flex items-center gap-2 text-lg font-semibold"><Gauge size={18} /> Workspace health</h2>
+            <p className="mt-1 text-sm text-slate-500">A blended score across quality, outreach, pipeline movement, response, and revenue potential.</p>
+          </div>
+          <Badge className="bg-slate-950 text-white ring-slate-950">{workspace?.health?.overall || 0}/100</Badge>
+        </div>
+        <div className="grid gap-3 md:grid-cols-5">
+          {healthLabels.map(([key, label]) => (
+            <div key={key} className="rounded-2xl bg-slate-50 p-4">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <p className="text-sm font-medium text-slate-600">{label}</p>
+                <span className="text-sm font-semibold">{workspace?.health?.[key] || 0}</span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+                <div className="h-full rounded-full bg-slate-950" style={{ width: `${workspace?.health?.[key] || 0}%` }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {sections.stats !== false && <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
         {statCards.map(([key, label]) => (
           <div key={key} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</p>
             <p className="mt-3 text-3xl font-semibold tracking-tight">{workspace?.stats?.[key] ?? 0}</p>
           </div>
         ))}
-      </div>
+      </div>}
 
       <div className="grid gap-6 xl:grid-cols-[1fr_0.9fr]">
-        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+        {sections.recommendedServices !== false && <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="flex items-center gap-2 text-lg font-semibold"><Sparkles size={18} /> Recommended services</h2>
             <Badge className="bg-slate-100 text-slate-700 ring-slate-200">{workspace?.recommendedServices?.length || 0} active</Badge>
@@ -90,9 +122,9 @@ export default function WorkspaceDetailPage() {
             ))}
             {!loading && !workspace?.recommendedServices?.length && <p className="text-sm text-slate-500">No recommendations yet. Run scans or reprocess opportunities for this workspace.</p>}
           </div>
-        </section>
+        </section>}
 
-        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+        {sections.scannerTemplates !== false && <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold"><FileText size={18} /> Scanner templates</h2>
           <div className="space-y-2">
             {(workspace?.templates || []).map((template) => (
@@ -108,10 +140,10 @@ export default function WorkspaceDetailPage() {
             ))}
             {!loading && !workspace?.templates?.length && <p className="text-sm text-slate-500">No templates saved for this industry yet.</p>}
           </div>
-        </section>
+        </section>}
       </div>
 
-      <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+      {sections.outreachDrafts !== false && <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold"><Send size={18} /> Outreach drafts</h2>
         <div className="grid gap-3 lg:grid-cols-2">
           {(workspace?.outreachDrafts || []).map((lead) => (
@@ -129,9 +161,9 @@ export default function WorkspaceDetailPage() {
           ))}
           {!loading && !workspace?.outreachDrafts?.length && <p className="text-sm text-slate-500">No outreach drafts for this workspace yet.</p>}
         </div>
-      </section>
+      </section>}
 
-      <DashboardPage workspaceSlug={industrySlug} workspaceIndustryName={industry.name} embedded />
+      {sections.leads !== false && <DashboardPage workspaceSlug={industrySlug} workspaceIndustryName={industry.name} embedded />}
     </div>
   );
 }

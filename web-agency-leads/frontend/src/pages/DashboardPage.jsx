@@ -1,4 +1,4 @@
-import { Grid2X2, List, Plus, Search, SlidersHorizontal } from "lucide-react";
+import { Archive, Grid2X2, List, Plus, Search, SlidersHorizontal, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import LeadCard from "../components/LeadCard.jsx";
 import LeadFormModal from "../components/LeadFormModal.jsx";
@@ -20,7 +20,7 @@ const statLabels = [
   ["remindersDue", "Reminders due"]
 ];
 
-const baseFilters = { search: "", priority: "", status: "", websiteStatus: "", industry: "", recommendedServiceId: "", minServiceScore: "", minScore: "", maxScore: "", hasScreenshot: "", hasPhone: "", sortBy: "createdAt", sortOrder: "desc", page: 1 };
+const baseFilters = { search: "", priority: "", status: "", websiteStatus: "", industryId: "", recommendedServiceId: "", minServiceScore: "", minScore: "", maxScore: "", hasScreenshot: "", hasPhone: "", missingAnalytics: "", missingBooking: "", cms: "", withoutMetaPixel: "", sortBy: "createdAt", sortOrder: "desc", page: 1 };
 
 function readSavedWorkspaceFilters(slug) {
   try {
@@ -38,12 +38,14 @@ export default function DashboardPage({ workspaceSlug = "", workspaceIndustryNam
   const [meta, setMeta] = useState({ page: 1, totalPages: 1 });
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState("cards");
+  const [showMoreFilters, setShowMoreFilters] = useState(false);
+  const [selected, setSelected] = useState([]);
   const [modalLead, setModalLead] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [catalog, setCatalog] = useState({ industries: [], services: [] });
   const [filters, setFilters] = useState(() => {
     if (!workspaceSlug) return baseFilters;
-    return { ...baseFilters, ...readSavedWorkspaceFilters(workspaceSlug), industry: "" };
+    return { ...baseFilters, ...readSavedWorkspaceFilters(workspaceSlug), industryId: "" };
   });
 
   const params = useMemo(() => {
@@ -53,12 +55,12 @@ export default function DashboardPage({ workspaceSlug = "", workspaceIndustryNam
 
   useEffect(() => {
     if (!workspaceSlug) return;
-    setFilters({ ...baseFilters, ...readSavedWorkspaceFilters(workspaceSlug), industry: "" });
+    setFilters({ ...baseFilters, ...readSavedWorkspaceFilters(workspaceSlug), industryId: "" });
   }, [workspaceSlug]);
 
   useEffect(() => {
     if (!workspaceSlug) return;
-    localStorage.setItem(`workspace_filters_${workspaceSlug}`, JSON.stringify({ ...filters, industry: "" }));
+    localStorage.setItem(`workspace_filters_${workspaceSlug}`, JSON.stringify({ ...filters, industryId: "" }));
   }, [workspaceSlug, JSON.stringify(filters)]);
 
   async function loadLeads() {
@@ -68,6 +70,7 @@ export default function DashboardPage({ workspaceSlug = "", workspaceIndustryNam
       setLeads(data.items);
       setStats(data.stats);
       setMeta(data.meta);
+      setSelected((items) => items.filter((id) => data.items.some((lead) => lead.id === id)));
     } catch (error) {
       push(error.response?.data?.message || "Could not load leads", "error");
     } finally {
@@ -97,7 +100,7 @@ export default function DashboardPage({ workspaceSlug = "", workspaceIndustryNam
   }
 
   async function archiveLead(lead) {
-    await api.put(`/leads/${lead.id}`, { ...lead, status: "ARCHIVED" });
+    await api.put(`/leads/${lead.id}`, { status: "ARCHIVED" });
     push("Lead archived");
     loadLeads();
   }
@@ -107,6 +110,33 @@ export default function DashboardPage({ workspaceSlug = "", workspaceIndustryNam
     await api.delete(`/leads/${lead.id}`);
     push("Lead deleted");
     loadLeads();
+  }
+
+  function toggleSelected(id) {
+    setSelected((items) => (items.includes(id) ? items.filter((item) => item !== id) : [...items, id]));
+  }
+
+  function toggleAllVisible() {
+    const visibleIds = leads.map((lead) => lead.id);
+    const allSelected = visibleIds.every((id) => selected.includes(id));
+    setSelected(allSelected ? selected.filter((id) => !visibleIds.includes(id)) : [...new Set([...selected, ...visibleIds])]);
+  }
+
+  async function bulkArchive() {
+    if (!selected.length) return push("Select leads first", "error");
+    await api.put("/leads/bulk", { leadIds: selected, status: "ARCHIVED" });
+    push(`Archived ${selected.length} leads`);
+    setSelected([]);
+    await loadLeads();
+  }
+
+  async function bulkDelete() {
+    if (!selected.length) return push("Select leads first", "error");
+    if (!confirm(`Delete ${selected.length} selected leads?`)) return;
+    const { data } = await api.delete("/leads/bulk", { data: { leadIds: selected } });
+    push(`Deleted ${data.deleted} leads`);
+    setSelected([]);
+    await loadLeads();
   }
 
   function openCreate() {
@@ -152,7 +182,7 @@ export default function DashboardPage({ workspaceSlug = "", workspaceIndustryNam
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
-        <div className="grid gap-3 md:grid-cols-[1.4fr_0.7fr_0.8fr_0.8fr_auto]">
+        <div className="grid gap-3 md:grid-cols-[1.4fr_0.7fr_0.8fr_0.8fr_auto_auto]">
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
             <Input className="pl-9" placeholder="Search company, industry, location, website" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value, page: 1 })} />
@@ -175,6 +205,14 @@ export default function DashboardPage({ workspaceSlug = "", workspaceIndustryNam
             <option value="">Website status</option>
             {Object.entries(websiteStatuses).map(([key, item]) => <option key={key} value={key}>{item.label}</option>)}
           </Select>
+          {!workspaceSlug ? (
+            <Select value={filters.industryId} onChange={(event) => setFilters({ ...filters, industryId: event.target.value, page: 1 })}>
+              <option value="">All industries</option>
+              {catalog.industries.map((industry) => <option key={industry.id} value={industry.id}>{industry.name}</option>)}
+            </Select>
+          ) : (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-600">{workspaceIndustryName || "Industry locked"}</div>
+          )}
           <Select value={`${filters.sortBy}:${filters.sortOrder}`} onChange={(event) => {
             const [sortBy, sortOrder] = event.target.value.split(":");
             setFilters({ ...filters, sortBy, sortOrder });
@@ -189,23 +227,25 @@ export default function DashboardPage({ workspaceSlug = "", workspaceIndustryNam
             <button onClick={() => setView("table")} className={`rounded-md p-2 ${view === "table" ? "bg-white shadow-sm" : "text-slate-500"}`} aria-label="Table view"><List size={16} /></button>
           </div>
         </div>
-        <div className="mt-3 grid gap-3 md:grid-cols-4">
-          {!workspaceSlug ? (
-            <Select value={filters.industry} onChange={(event) => setFilters({ ...filters, industry: event.target.value, page: 1 })}>
-              <option value="">All industries</option>
-              {catalog.industries.map((industry) => <option key={industry.id} value={industry.name}>{industry.name}</option>)}
-            </Select>
-          ) : (
-            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-600">{workspaceIndustryName || "Industry locked"}</div>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+          <Button variant="ghost" onClick={() => setShowMoreFilters((value) => !value)}><SlidersHorizontal size={16} /> {showMoreFilters ? "Hide filters" : "More filters"}</Button>
+          {selected.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-semibold text-slate-600">{selected.length} selected</span>
+              <Button variant="secondary" onClick={bulkArchive}><Archive size={16} /> Bulk archive</Button>
+              <Button variant="danger" onClick={bulkDelete}><Trash2 size={16} /> Bulk delete</Button>
+            </div>
           )}
+        </div>
+        {showMoreFilters && <div className="mt-3 grid gap-3 md:grid-cols-4">
           <Select value={filters.recommendedServiceId} onChange={(event) => setFilters({ ...filters, recommendedServiceId: event.target.value, page: 1 })}>
             <option value="">Recommended service</option>
             {catalog.services.map((service) => <option key={service.id} value={service.id}>{service.name}</option>)}
           </Select>
           <Input type="number" min="1" max="10" placeholder="Min service score" value={filters.minServiceScore} onChange={(event) => setFilters({ ...filters, minServiceScore: event.target.value, page: 1 })} />
           <Input type="number" min="1" max="10" placeholder="Min score" value={filters.minScore} onChange={(event) => setFilters({ ...filters, minScore: event.target.value, page: 1 })} />
-        </div>
-        <div className="mt-3 grid gap-3 md:grid-cols-4">
+        </div>}
+        {showMoreFilters && <div className="mt-3 grid gap-3 md:grid-cols-4">
           <Input type="number" min="1" max="10" placeholder="Max score" value={filters.maxScore} onChange={(event) => setFilters({ ...filters, maxScore: event.target.value, page: 1 })} />
           <Select value={filters.hasScreenshot} onChange={(event) => setFilters({ ...filters, hasScreenshot: event.target.value, page: 1 })}>
             <option value="">Screenshot optional</option>
@@ -215,7 +255,26 @@ export default function DashboardPage({ workspaceSlug = "", workspaceIndustryNam
             <option value="">Phone optional</option>
             <option value="true">Has phone</option>
           </Select>
-        </div>
+          <Select value={filters.missingAnalytics} onChange={(event) => setFilters({ ...filters, missingAnalytics: event.target.value, page: 1 })}>
+            <option value="">Analytics optional</option>
+            <option value="true">Missing analytics</option>
+          </Select>
+          <Select value={filters.missingBooking} onChange={(event) => setFilters({ ...filters, missingBooking: event.target.value, page: 1 })}>
+            <option value="">Booking optional</option>
+            <option value="true">Missing booking system</option>
+          </Select>
+          <Select value={filters.cms} onChange={(event) => setFilters({ ...filters, cms: event.target.value, page: 1 })}>
+            <option value="">Any CMS</option>
+            <option value="wordpress">WordPress only</option>
+            <option value="wix">Wix only</option>
+            <option value="shopify">Shopify only</option>
+            <option value="webflow">Webflow only</option>
+          </Select>
+          <Select value={filters.withoutMetaPixel} onChange={(event) => setFilters({ ...filters, withoutMetaPixel: event.target.value, page: 1 })}>
+            <option value="">Meta Pixel optional</option>
+            <option value="true">Without Meta Pixel</option>
+          </Select>
+        </div>}
       </div>
 
       {loading ? (
@@ -228,10 +287,10 @@ export default function DashboardPage({ workspaceSlug = "", workspaceIndustryNam
         </div>
       ) : view === "cards" ? (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {leads.map((lead) => <LeadCard key={lead.id} lead={lead} onEdit={openEdit} onArchive={archiveLead} />)}
+          {leads.map((lead) => <LeadCard key={lead.id} lead={lead} onEdit={openEdit} onArchive={archiveLead} onDelete={deleteLead} selected={selected.includes(lead.id)} onSelect={toggleSelected} />)}
         </div>
       ) : (
-        <LeadTable leads={leads} onEdit={openEdit} onDelete={deleteLead} />
+        <LeadTable leads={leads} onEdit={openEdit} onDelete={deleteLead} selected={selected} onSelect={toggleSelected} onSelectAll={toggleAllVisible} />
       )}
 
       <div className="flex items-center justify-between">

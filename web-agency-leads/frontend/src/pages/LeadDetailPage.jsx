@@ -1,13 +1,43 @@
-import { ArrowLeft, ArrowUpRight, Clipboard, GitCompare, Mail, MailPlus, MapPin, Pencil, Phone, Plus, Search, Trash2 } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, Clipboard, Cpu, DollarSign, GitCompare, Globe2, History, Mail, MailPlus, MapPin, MessageCircle, Pencil, Phone, Plus, Search, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import LeadFormModal from "../components/LeadFormModal.jsx";
 import { Badge } from "../components/ui/Badge.jsx";
 import { Button } from "../components/ui/Button.jsx";
-import { Select, Textarea } from "../components/ui/Input.jsx";
+import { Input, Select, Textarea } from "../components/ui/Input.jsx";
 import { useToast } from "../hooks/useToast.jsx";
 import { api } from "../services/api.js";
 import { domain, formatDate, pipelineStages, priorities, statuses, websiteStatuses } from "../utils/format.js";
+
+const techGroups = [
+  ["Analytics", [["GA4", "analyticsGa4"], ["GTM", "analyticsGtm"], ["Meta Pixel", "analyticsMetaPixel"]]],
+  ["Booking", [["Calendly", "bookingCalendly"], ["SimplyBook", "bookingSimplyBook"], ["Acuity", "bookingAcuity"]]],
+  ["Marketing", [["Mailchimp", "marketingMailchimp"], ["HubSpot", "marketingHubspot"], ["Klaviyo", "marketingKlaviyo"]]],
+  ["Chat", [["Intercom", "chatIntercom"], ["Tawk.to", "chatTawk"], ["Zendesk", "chatZendesk"]]]
+];
+
+function contactRows(lead) {
+  return [
+    ["General email", lead.generalEmail],
+    ["Owner email", lead.ownerEmail],
+    ["LinkedIn", lead.linkedinCompany],
+    ["Instagram", lead.instagram],
+    ["Facebook", lead.facebook],
+    ["WhatsApp", lead.whatsapp]
+  ].filter(([, value]) => value);
+}
+
+function money(value) {
+  return value == null || value === "" ? "-" : `$${Number(value || 0).toLocaleString()}`;
+}
+
+function fixTitle(fix) {
+  return typeof fix === "string" ? fix : fix.title || fix.details || "Recommended fix";
+}
+
+function fixMeta(fix, key) {
+  return typeof fix === "string" ? null : fix[key];
+}
 
 export default function LeadDetailPage() {
   const { id } = useParams();
@@ -18,15 +48,29 @@ export default function LeadDetailPage() {
   const [note, setNote] = useState("");
   const [drafts, setDrafts] = useState([]);
   const [competitorData, setCompetitorData] = useState({ competitors: [], salesAngle: "", leadScore: null });
+  const [revenueForm, setRevenueForm] = useState({});
   const [generatingDraft, setGeneratingDraft] = useState(false);
   const [competitorLoading, setCompetitorLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [editingNoteId, setEditingNoteId] = useState("");
+  const [editingNote, setEditingNote] = useState("");
 
   async function loadLead() {
     setLoading(true);
     try {
       const { data } = await api.get(`/leads/${id}`);
       setLead(data);
+      setRevenueForm({
+        estimatedMinValue: data.estimatedMinValue ?? "",
+        estimatedMaxValue: data.estimatedMaxValue ?? "",
+        actualRevenue: data.actualRevenue ?? "",
+        profit: data.profit ?? "",
+        monthlyRetainer: data.monthlyRetainer ?? "",
+        annualRetainer: data.annualRetainer ?? "",
+        paymentStatus: data.paymentStatus || "",
+        wonAt: data.wonAt ? data.wonAt.slice(0, 10) : ""
+      });
     } catch (error) {
       push(error.response?.data?.message || "Could not load lead", "error");
       navigate("/");
@@ -66,6 +110,17 @@ export default function LeadDetailPage() {
     push("Lead updated");
   }
 
+  async function saveRevenue(event) {
+    event.preventDefault();
+    const payload = Object.fromEntries(Object.entries(revenueForm).map(([key, value]) => [key, value === "" ? null : value]));
+    const { data } = await api.put(`/leads/${id}`, {
+      ...payload,
+      wonAt: payload.wonAt ? new Date(payload.wonAt).toISOString() : null
+    });
+    setLead(data);
+    push("Revenue updated");
+  }
+
   async function addNote(event) {
     event.preventDefault();
     if (!note.trim()) return;
@@ -75,9 +130,30 @@ export default function LeadDetailPage() {
     loadLead();
   }
 
+  async function updateNote(noteId) {
+    if (!editingNote.trim()) return;
+    await api.put(`/notes/${noteId}`, { note: editingNote });
+    setEditingNoteId("");
+    setEditingNote("");
+    push("Note updated");
+    loadLead();
+  }
+
+  async function deleteNote(noteId) {
+    if (!confirm("Delete this note?")) return;
+    await api.delete(`/notes/${noteId}`);
+    push("Note deleted");
+    loadLead();
+  }
+
   async function copyOutreach() {
     await navigator.clipboard.writeText(lead.outreachEmail || "");
     push("Outreach copied");
+  }
+
+  async function copyContact(value) {
+    await navigator.clipboard.writeText(value || "");
+    push("Contact copied");
   }
 
   async function generateOutreach() {
@@ -148,6 +224,19 @@ export default function LeadDetailPage() {
 
   if (loading || !lead) return <div className="rounded-3xl border border-slate-200 bg-white p-10 text-slate-500">Loading lead...</div>;
 
+  const scoreRows = [
+    ["Design", lead.visualDesignScore],
+    ["Mobile", lead.mobileScore],
+    ["Trust", lead.trustScore],
+    ["CTA", lead.ctaScore],
+    ["SEO", lead.seoScore],
+    ["Conversion", lead.conversionScore || lead.opportunityScore],
+    ["Speed", lead.speedScore],
+    ["Booking", lead.bookingScore],
+    ["Analytics", lead.analyticsScore],
+    ["Contactability", lead.contactabilityScore || (lead.contactConfidence ? Math.round(lead.contactConfidence / 10) : null)]
+  ];
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -191,15 +280,8 @@ export default function LeadDetailPage() {
           <div className="grid gap-4 md:grid-cols-[1fr_220px]">
             <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
               <h2 className="mb-4 text-lg font-semibold">Score breakdown</h2>
-              <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
-                {[
-                  ["Visual", lead.visualDesignScore],
-                  ["Mobile", lead.mobileScore],
-                  ["Trust", lead.trustScore],
-                  ["CTA", lead.ctaScore],
-                  ["SEO", lead.seoScore],
-                  ["Opportunity", lead.opportunityScore]
-                ].map(([label, value]) => (
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+                {scoreRows.map(([label, value]) => (
                   <div key={label} className="rounded-2xl bg-slate-50 p-3">
                     <p className="text-xs text-slate-400">{label}</p>
                     <p className="mt-1 text-2xl font-semibold">{value || "-"}</p>
@@ -214,6 +296,63 @@ export default function LeadDetailPage() {
               </div>
             </div>
           </div>
+
+          <form onSubmit={saveRevenue} className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="mb-5 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="flex items-center gap-2 text-lg font-semibold"><DollarSign size={18} /> Revenue tracking</h2>
+                <p className="mt-1 text-sm text-slate-500">Track project value, cash collected, retainers, and close date.</p>
+              </div>
+              <Button>Save revenue</Button>
+            </div>
+            <div className="mb-5 grid gap-3 md:grid-cols-4">
+              <div className="rounded-2xl bg-slate-950 p-4 text-white">
+                <p className="text-xs uppercase tracking-wide text-slate-400">Estimated range</p>
+                <p className="mt-2 text-xl font-semibold">{money(revenueForm.estimatedMinValue)} - {money(revenueForm.estimatedMaxValue)}</p>
+              </div>
+              <div className="rounded-2xl bg-emerald-50 p-4 text-emerald-950">
+                <p className="text-xs uppercase tracking-wide text-emerald-700">Actual revenue</p>
+                <p className="mt-2 text-xl font-semibold">{money(revenueForm.actualRevenue)}</p>
+              </div>
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <p className="text-xs uppercase tracking-wide text-slate-400">Profit</p>
+                <p className="mt-2 text-xl font-semibold">{money(revenueForm.profit)}</p>
+              </div>
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <p className="text-xs uppercase tracking-wide text-slate-400">Annual retainer</p>
+                <p className="mt-2 text-xl font-semibold">{money(revenueForm.annualRetainer)}</p>
+              </div>
+            </div>
+            <div className="grid gap-3 md:grid-cols-4">
+              {[
+                ["Min value", "estimatedMinValue"],
+                ["Max value", "estimatedMaxValue"],
+                ["Actual revenue", "actualRevenue"],
+                ["Profit", "profit"],
+                ["Monthly retainer", "monthlyRetainer"],
+                ["Annual retainer", "annualRetainer"]
+              ].map(([label, key]) => (
+                <label key={key}>
+                  <span className="mb-1.5 block text-sm font-medium">{label}</span>
+                  <Input type="number" min={key === "profit" ? undefined : "0"} value={revenueForm[key] || ""} onChange={(event) => setRevenueForm({ ...revenueForm, [key]: event.target.value })} />
+                </label>
+              ))}
+              <label>
+                <span className="mb-1.5 block text-sm font-medium">Payment status</span>
+                <Select value={revenueForm.paymentStatus || ""} onChange={(event) => setRevenueForm({ ...revenueForm, paymentStatus: event.target.value })}>
+                  <option value="">Not set</option>
+                  <option value="UNPAID">Unpaid</option>
+                  <option value="DEPOSIT_PAID">Deposit paid</option>
+                  <option value="PAID">Paid</option>
+                  <option value="OVERDUE">Overdue</option>
+                </Select>
+              </label>
+              <label>
+                <span className="mb-1.5 block text-sm font-medium">Won at</span>
+                <Input type="date" value={revenueForm.wonAt || ""} onChange={(event) => setRevenueForm({ ...revenueForm, wonAt: event.target.value })} />
+              </label>
+            </div>
+          </form>
 
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="mb-5 flex items-center justify-between">
@@ -234,131 +373,69 @@ export default function LeadDetailPage() {
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <h2 className="mb-4 text-lg font-semibold">Recommended fixes</h2>
             {Array.isArray(lead.recommendedFixes) && lead.recommendedFixes.length ? (
-              <ul className="space-y-3">
-                {lead.recommendedFixes.map((fix, index) => <li key={index} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">{fix}</li>)}
-              </ul>
+              <div className="space-y-3">
+                {lead.recommendedFixes.map((fix, index) => (
+                  <div key={index} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+                      <p className="font-semibold text-slate-950">{fixTitle(fix)}</p>
+                      <div className="flex flex-wrap gap-2">
+                        {fixMeta(fix, "priority") && <Badge className="bg-rose-50 text-rose-700 ring-rose-200">Priority: {fixMeta(fix, "priority")}</Badge>}
+                        {fixMeta(fix, "impact") && <Badge className="bg-emerald-50 text-emerald-700 ring-emerald-200">Impact: {fixMeta(fix, "impact")}</Badge>}
+                        {fixMeta(fix, "effort") && <Badge className="bg-amber-50 text-amber-700 ring-amber-200">Effort: {fixMeta(fix, "effort")}</Badge>}
+                      </div>
+                    </div>
+                    {fixMeta(fix, "details") && <p className="text-sm leading-6 text-slate-600">{fixMeta(fix, "details")}</p>}
+                    {fixMeta(fix, "serviceFit") && <p className="mt-3 rounded-xl bg-white px-3 py-2 text-sm font-medium text-slate-700">Service fit: {fixMeta(fix, "serviceFit")}</p>}
+                  </div>
+                ))}
+              </div>
             ) : (
               <p className="text-sm text-slate-500">No recommended fixes saved yet.</p>
             )}
           </div>
 
-          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="mb-5 flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-semibold">Service opportunities</h2>
-                <p className="text-sm text-slate-500">What we should sell, estimated value, and why.</p>
-              </div>
-              <Button variant="secondary" onClick={reprocessOpportunities}>Reprocess</Button>
-            </div>
-            {lead.serviceOpportunities?.length ? (
-              <div className="grid gap-3 md:grid-cols-2">
-                {lead.serviceOpportunities.map((opportunity) => (
-                  <div key={opportunity.id} className={`rounded-2xl border p-4 ${opportunity.recommended ? "border-emerald-200 bg-emerald-50" : "border-slate-200 bg-slate-50"}`}>
-                    <div className="mb-3 flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-semibold text-slate-950">{opportunity.service.name}</p>
-                        {opportunity.recommended && <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-emerald-700">Recommended primary service</p>}
-                      </div>
-                      <Badge className={opportunity.score >= 8 ? "bg-emerald-100 text-emerald-800 ring-emerald-200" : opportunity.score >= 6 ? "bg-amber-100 text-amber-800 ring-amber-200" : "bg-slate-100 text-slate-700 ring-slate-200"}>{opportunity.score}/10</Badge>
-                    </div>
-                    <p className="text-sm font-semibold text-slate-800">${opportunity.estimatedMinValue.toLocaleString()} - ${opportunity.estimatedMaxValue.toLocaleString()}</p>
-                    <p className="mt-2 text-sm leading-6 text-slate-600">{opportunity.reason}</p>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="rounded-2xl border border-dashed border-slate-300 p-6 text-sm text-slate-500">
-                No service opportunities yet. Run reprocess to generate them for this lead.
-              </div>
-            )}
-          </div>
-
-          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-              <div>
-                <h2 className="flex items-center gap-2 text-lg font-semibold"><GitCompare size={18} /> Competitor comparison</h2>
-                <p className="mt-1 text-sm text-slate-500">Find local competitors, compare website scores, and use the sales angle in outreach.</p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button variant="secondary" onClick={findCompetitors} disabled={competitorLoading}><Search size={16} /> Find</Button>
-                <Button variant="secondary" onClick={auditCompetitors} disabled={competitorLoading || !competitorData.competitors.length}><GitCompare size={16} /> Audit</Button>
-                <Button onClick={copySalesAngle} disabled={!competitorData.salesAngle}><Clipboard size={16} /> Copy angle</Button>
-              </div>
-            </div>
-
-            <div className="mb-5 rounded-2xl bg-slate-950 p-5 text-slate-100">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">AI sales angle</p>
-              <p className="mt-3 text-sm leading-6">{competitorData.salesAngle || "Run competitor discovery to generate a comparison-based pitch."}</p>
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-4">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <p className="text-sm font-semibold">{lead.company}</p>
-                <p className="mt-2 text-3xl font-semibold">{lead.score}<span className="text-base text-slate-400">/10</span></p>
-                <p className="mt-1 text-xs text-slate-500">Lead website score</p>
-              </div>
-              {competitorData.competitors.map((competitor) => (
-                <div key={competitor.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                  <div className="aspect-[16/10] bg-slate-100">
-                    {competitor.screenshotPath ? (
-                      <img src={competitor.screenshotPath} alt={`${competitor.company} website screenshot`} className="h-full w-full object-cover" />
-                    ) : (
-                      <div className="grid h-full place-items-center px-4 text-center text-xs text-slate-400">Audit to capture screenshot</div>
-                    )}
-                  </div>
-                  <div className="p-4">
-                    <a href={competitor.website} target="_blank" rel="noreferrer" className="block truncate text-sm font-semibold hover:underline">{competitor.company}</a>
-                    <p className="mt-2 text-3xl font-semibold">{competitor.score}<span className="text-base text-slate-400">/10</span></p>
-                    <div className="mt-3 space-y-2 text-xs text-slate-600">
-                      {(Array.isArray(competitor.strengths) ? competitor.strengths : []).slice(0, 2).map((item) => <p key={item} className="rounded-lg bg-emerald-50 px-2 py-1 text-emerald-800">{item}</p>)}
-                      {(Array.isArray(competitor.weaknesses) ? competitor.weaknesses : []).slice(0, 1).map((item) => <p key={item} className="rounded-lg bg-amber-50 px-2 py-1 text-amber-800">{item}</p>)}
-                    </div>
-                  </div>
-                </div>
-              ))}
-              {!competitorData.competitors.length && (
-                <div className="rounded-2xl border border-dashed border-slate-300 p-6 text-sm text-slate-500 md:col-span-3">
-                  No competitors saved yet. Use Find to pull three local competitors from Google Places.
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Outreach email</h2>
-              <div className="flex gap-2">
-                <Button variant="secondary" onClick={generateOutreach} disabled={generatingDraft}><MailPlus size={16} /> {generatingDraft ? "Generating..." : "Generate"}</Button>
-                <Button variant="secondary" onClick={copyOutreach} disabled={!lead.outreachEmail}><Clipboard size={16} /> Copy</Button>
-              </div>
-            </div>
-            <pre className="whitespace-pre-wrap rounded-2xl bg-slate-950 p-5 text-sm leading-6 text-slate-100">{lead.outreachEmail || "No outreach copy saved yet."}</pre>
-          </div>
-
-          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Saved outreach drafts</h2>
-              <Link to="/outreach" className="text-sm font-semibold text-slate-500 hover:text-slate-950">Open outreach</Link>
-            </div>
-            <div className="space-y-3">
-              {drafts.map((draft) => (
-                <div key={draft.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="mb-2 flex items-start justify-between gap-3">
-                    <div>
-                      <p className="font-semibold">{draft.type.replaceAll("_", " ")}</p>
-                      <p className="text-xs text-slate-400">{draft.status} · {formatDate(draft.updatedAt)}</p>
-                    </div>
-                    <Button variant="ghost" className="px-2.5" onClick={() => copyDraft(draft)}><Clipboard size={15} /></Button>
-                  </div>
-                  <p className="line-clamp-3 text-sm leading-6 text-slate-600">{draft.fullMessage}</p>
-                </div>
-              ))}
-              {!drafts.length && <p className="text-sm text-slate-500">No saved drafts yet.</p>}
-            </div>
-          </div>
         </section>
 
         <aside className="space-y-6">
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h2 className="flex items-center gap-2 text-lg font-semibold"><MessageCircle size={18} /> Contact details</h2>
+              <Badge className={(lead.contactConfidence || 0) >= 70 ? "bg-emerald-100 text-emerald-800 ring-emerald-200" : (lead.contactConfidence || 0) >= 45 ? "bg-amber-100 text-amber-800 ring-amber-200" : "bg-slate-100 text-slate-700 ring-slate-200"}>{lead.contactConfidence || 0}% confidence</Badge>
+            </div>
+            <div className="space-y-2">
+              {contactRows(lead).map(([label, value]) => (
+                <button key={label} onClick={() => copyContact(value)} className="w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-left hover:bg-slate-100">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</p>
+                  <p className="mt-1 break-all text-sm font-medium text-slate-700">{value}</p>
+                </button>
+              ))}
+              {!contactRows(lead).length && <p className="rounded-2xl border border-dashed border-slate-300 p-4 text-sm text-slate-500">No email or social contact found yet.</p>}
+            </div>
+            {lead.contactSource && <p className="mt-3 text-xs text-slate-400">Source: {lead.contactSource}</p>}
+          </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold"><Cpu size={18} /> Technology stack</h2>
+            <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">CMS / builder</p>
+              <p className="mt-1 flex items-center gap-2 text-lg font-semibold capitalize"><Globe2 size={16} /> {lead.cms || "Unknown"}</p>
+            </div>
+            <div className="space-y-4">
+              {techGroups.map(([group, items]) => (
+                <div key={group}>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">{group}</p>
+                  <div className="flex flex-wrap gap-2">
+                    {items.map(([label, key]) => (
+                      <Badge key={key} className={lead[key] ? "bg-emerald-100 text-emerald-800 ring-emerald-200" : "bg-slate-100 text-slate-500 ring-slate-200"}>
+                        {lead[key] ? "Detected" : "Missing"}: {label}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <h2 className="mb-4 text-lg font-semibold">Company details</h2>
             <div className="space-y-3 text-sm text-slate-600">
@@ -387,20 +464,20 @@ export default function LeadDetailPage() {
               <Textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Add a private note..." />
               <Button className="mt-3 w-full"><Plus size={16} /> Add note</Button>
             </form>
-            <div className="space-y-3">
-              {lead.notes.map((item) => (
-                <div key={item.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <p className="text-sm text-slate-700">{item.note}</p>
-                  <p className="mt-2 text-xs text-slate-400">{item.user.name} · {formatDate(item.createdAt)}</p>
-                </div>
-              ))}
-              {!lead.notes.length && <p className="text-sm text-slate-500">No notes yet.</p>}
-            </div>
+            <Button type="button" variant="secondary" className="w-full" onClick={() => setNotesOpen(true)}>
+              Open full notes ({lead.notes.length})
+            </Button>
+            {lead.notes[0] ? (
+              <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <p className="line-clamp-3 text-sm text-slate-700">{lead.notes[0].note}</p>
+                <p className="mt-2 text-xs text-slate-400">{lead.notes[0].user.name} · {formatDate(lead.notes[0].createdAt)}</p>
+              </div>
+            ) : <p className="mt-3 text-sm text-slate-500">No notes yet.</p>}
           </div>
 
-          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h2 className="mb-4 text-lg font-semibold">History timeline</h2>
-            <div className="space-y-4">
+          <details className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <summary className="flex cursor-pointer items-center gap-2 text-lg font-semibold"><History size={18} /> Audit trail</summary>
+            <div className="mt-4 space-y-4">
               {lead.statusHistory.map((item) => (
                 <div key={item.id} className="border-l-2 border-slate-200 pl-4">
                   <p className="text-sm font-medium">
@@ -411,11 +488,185 @@ export default function LeadDetailPage() {
               ))}
               {!lead.statusHistory.length && <p className="text-sm text-slate-500">No status changes yet.</p>}
             </div>
-          </div>
+          </details>
         </aside>
       </div>
 
+      <section className="space-y-6">
+        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-5 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold">Service opportunities</h2>
+              <p className="text-sm text-slate-500">What we should sell, estimated value, and why.</p>
+            </div>
+            <Button variant="secondary" onClick={reprocessOpportunities}>Reprocess</Button>
+          </div>
+          {lead.serviceOpportunities?.length ? (
+            <div className="grid gap-3">
+              {lead.serviceOpportunities.map((opportunity) => (
+                <div key={opportunity.id} className={`rounded-2xl border p-4 ${opportunity.recommended ? "border-emerald-200 bg-emerald-50" : "border-slate-200 bg-slate-50"}`}>
+                  <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <p className="font-semibold text-slate-950">{opportunity.service.name}</p>
+                      {opportunity.recommended && <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-emerald-700">Recommended primary service</p>}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Badge className={opportunity.score >= 8 ? "bg-emerald-100 text-emerald-800 ring-emerald-200" : opportunity.score >= 6 ? "bg-amber-100 text-amber-800 ring-amber-200" : "bg-slate-100 text-slate-700 ring-slate-200"}>Score {opportunity.score}/10</Badge>
+                      <Badge className="bg-slate-100 text-slate-700 ring-slate-200">Confidence {opportunity.confidence || "-"}%</Badge>
+                    </div>
+                  </div>
+                  <p className="text-sm font-semibold text-slate-800">${opportunity.estimatedMinValue.toLocaleString()} - ${opportunity.estimatedMaxValue.toLocaleString()}</p>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">{opportunity.reason}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-dashed border-slate-300 p-6 text-sm text-slate-500">
+              No service opportunities yet. Run reprocess to generate them for this lead.
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div>
+              <h2 className="flex items-center gap-2 text-lg font-semibold"><GitCompare size={18} /> Competitor comparison</h2>
+              <p className="mt-1 text-sm text-slate-500">Find local competitors, compare website scores, and use the sales angle in outreach.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="secondary" onClick={findCompetitors} disabled={competitorLoading}><Search size={16} /> Find</Button>
+              <Button variant="secondary" onClick={auditCompetitors} disabled={competitorLoading || !competitorData.competitors.length}><GitCompare size={16} /> Audit</Button>
+              <Button onClick={copySalesAngle} disabled={!competitorData.salesAngle}><Clipboard size={16} /> Copy angle</Button>
+            </div>
+          </div>
+
+          <div className="mb-5 rounded-2xl bg-slate-950 p-5 text-slate-100">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">AI sales angle</p>
+            <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6">{competitorData.salesAngle || "Run competitor discovery to generate a comparison-based pitch."}</p>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-4">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-sm font-semibold">{lead.company}</p>
+              <p className="mt-2 text-3xl font-semibold">{lead.score}<span className="text-base text-slate-400">/10</span></p>
+              <p className="mt-1 text-xs text-slate-500">Lead website score</p>
+            </div>
+            {competitorData.competitors.map((competitor) => (
+              <div key={competitor.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                <div className="aspect-[16/10] bg-slate-100">
+                  {competitor.screenshotPath ? (
+                    <img src={competitor.screenshotPath} alt={`${competitor.company} website screenshot`} className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="grid h-full place-items-center px-4 text-center text-xs text-slate-400">Audit to capture screenshot</div>
+                  )}
+                </div>
+                <div className="p-4">
+                  <a href={competitor.website} target="_blank" rel="noreferrer" className="block truncate text-sm font-semibold hover:underline">{competitor.company}</a>
+                  <p className="mt-2 text-3xl font-semibold">{competitor.score}<span className="text-base text-slate-400">/10</span></p>
+                  <div className="mt-3 space-y-2 text-xs text-slate-600">
+                    {(Array.isArray(competitor.strengths) ? competitor.strengths : []).slice(0, 2).map((item) => <p key={item} className="rounded-lg bg-emerald-50 px-2 py-1 text-emerald-800">{item}</p>)}
+                    {(Array.isArray(competitor.weaknesses) ? competitor.weaknesses : []).slice(0, 1).map((item) => <p key={item} className="rounded-lg bg-amber-50 px-2 py-1 text-amber-800">{item}</p>)}
+                  </div>
+                </div>
+              </div>
+            ))}
+            {!competitorData.competitors.length && (
+              <div className="rounded-2xl border border-dashed border-slate-300 p-6 text-sm text-slate-500 md:col-span-3">
+                No competitors saved yet. Use Find to pull three local competitors from Google Places.
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold">Outreach workspace</h2>
+              <p className="mt-1 text-sm text-slate-500">Contact intelligence plus the latest generated message.</p>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="secondary" onClick={generateOutreach} disabled={generatingDraft}><MailPlus size={16} /> {generatingDraft ? "Generating..." : "Generate"}</Button>
+              <Button variant="secondary" onClick={copyOutreach} disabled={!lead.outreachEmail}><Clipboard size={16} /> Copy</Button>
+            </div>
+          </div>
+          <div className="mb-4 grid gap-3 md:grid-cols-2">
+            {(contactRows(lead).slice(0, 4)).map(([label, value]) => (
+              <button key={label} onClick={() => copyContact(value)} className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-left transition hover:bg-slate-100">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</p>
+                <p className="mt-1 truncate text-sm font-semibold text-slate-800">{value}</p>
+              </button>
+            ))}
+            {!contactRows(lead).length && <p className="rounded-2xl border border-dashed border-slate-300 p-4 text-sm text-slate-500 md:col-span-2">No contact details captured yet. Run a full/deep scan to visit the contact page.</p>}
+          </div>
+          <pre className="whitespace-pre-wrap rounded-2xl bg-slate-950 p-5 text-sm leading-6 text-slate-100">{lead.outreachEmail || "No outreach copy saved yet."}</pre>
+        </div>
+
+        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Saved outreach drafts</h2>
+            <Link to="/outreach" className="text-sm font-semibold text-slate-500 hover:text-slate-950">Open outreach</Link>
+          </div>
+          <div className="space-y-3">
+            {drafts.map((draft) => (
+              <div key={draft.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="mb-2 flex items-start justify-between gap-3">
+                  <div>
+                    <p className="font-semibold">{draft.type.replaceAll("_", " ")}</p>
+                    <p className="text-xs text-slate-400">{draft.status} · {formatDate(draft.updatedAt)}</p>
+                  </div>
+                  <Button variant="ghost" className="px-2.5" onClick={() => copyDraft(draft)}><Clipboard size={15} /></Button>
+                </div>
+                <p className="line-clamp-3 text-sm leading-6 text-slate-600">{draft.fullMessage}</p>
+              </div>
+            ))}
+            {!drafts.length && <p className="text-sm text-slate-500">No saved drafts yet.</p>}
+          </div>
+        </div>
+      </section>
+
       {modalOpen && <LeadFormModal lead={lead} onClose={() => setModalOpen(false)} onSave={saveLead} />}
+      {notesOpen && (
+        <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/40 backdrop-blur-sm">
+          <div className="h-full w-full max-w-xl overflow-auto bg-white p-6 shadow-glow">
+            <div className="mb-6 flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-semibold">Private notes</h2>
+                <p className="text-sm text-slate-500">{lead.company}</p>
+              </div>
+              <button onClick={() => setNotesOpen(false)} className="rounded-lg p-2 hover:bg-slate-100" aria-label="Close notes"><X size={18} /></button>
+            </div>
+            <form onSubmit={addNote} className="mb-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <Textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Add a private note..." />
+              <Button className="mt-3"><Plus size={16} /> Add note</Button>
+            </form>
+            <div className="space-y-3">
+              {lead.notes.map((item) => (
+                <div key={item.id} className="rounded-2xl border border-slate-200 bg-white p-4">
+                  {editingNoteId === item.id ? (
+                    <>
+                      <Textarea value={editingNote} onChange={(event) => setEditingNote(event.target.value)} />
+                      <div className="mt-3 flex gap-2">
+                        <Button onClick={() => updateNote(item.id)}>Save</Button>
+                        <Button variant="secondary" onClick={() => { setEditingNoteId(""); setEditingNote(""); }}>Cancel</Button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="whitespace-pre-wrap text-sm text-slate-700">{item.note}</p>
+                      <p className="mt-2 text-xs text-slate-400">{item.user.name} · {formatDate(item.createdAt)}</p>
+                      <div className="mt-3 flex gap-2">
+                        <Button variant="secondary" onClick={() => { setEditingNoteId(item.id); setEditingNote(item.note); }}><Pencil size={15} /> Edit</Button>
+                        <Button variant="ghost" className="text-rose-600 hover:bg-rose-50" onClick={() => deleteNote(item.id)}><Trash2 size={15} /> Delete</Button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              ))}
+              {!lead.notes.length && <p className="rounded-2xl border border-dashed border-slate-300 p-5 text-center text-sm text-slate-500">No notes yet.</p>}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

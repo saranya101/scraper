@@ -10,6 +10,7 @@ import LeadDetailPage from "./pages/LeadDetailPage.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import OutreachPage from "./pages/OutreachPage.jsx";
 import ScannerPage from "./pages/ScannerPage.jsx";
+import SettingsPage from "./pages/SettingsPage.jsx";
 import WorkspaceDetailPage from "./pages/WorkspaceDetailPage.jsx";
 import WorkspacesPage from "./pages/WorkspacesPage.jsx";
 
@@ -42,6 +43,7 @@ export default function App() {
         <Route path="workspaces/:industrySlug" element={<WorkspaceDetailPage />} />
         <Route path="leads/:id" element={<LeadDetailPage />} />
         <Route path="imports" element={<ImportPage />} />
+        <Route path="settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

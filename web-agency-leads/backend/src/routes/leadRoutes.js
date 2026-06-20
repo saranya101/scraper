@@ -32,6 +32,7 @@ const leadBody = z.object({
   phone: z.string().optional().nullable(),
   address: z.string().optional().nullable(),
   industry: z.string().optional().nullable(),
+  industryId: z.string().optional().nullable(),
   location: z.string().optional().nullable(),
   screenshotPath: z.string().optional().nullable(),
   mobileScreenshotPath: z.string().optional().nullable(),
@@ -41,7 +42,20 @@ const leadBody = z.object({
   trustScore: z.coerce.number().int().min(1).max(10).optional().nullable(),
   ctaScore: z.coerce.number().int().min(1).max(10).optional().nullable(),
   seoScore: z.coerce.number().int().min(1).max(10).optional().nullable(),
+  conversionScore: z.coerce.number().int().min(1).max(10).optional().nullable(),
+  speedScore: z.coerce.number().int().min(1).max(10).optional().nullable(),
+  bookingScore: z.coerce.number().int().min(1).max(10).optional().nullable(),
+  analyticsScore: z.coerce.number().int().min(1).max(10).optional().nullable(),
+  contactabilityScore: z.coerce.number().int().min(1).max(10).optional().nullable(),
   opportunityScore: z.coerce.number().int().min(1).max(10).optional().nullable(),
+  estimatedMinValue: z.coerce.number().int().min(0).optional().nullable(),
+  estimatedMaxValue: z.coerce.number().int().min(0).optional().nullable(),
+  actualRevenue: z.coerce.number().int().min(0).optional().nullable(),
+  profit: z.coerce.number().int().optional().nullable(),
+  monthlyRetainer: z.coerce.number().int().min(0).optional().nullable(),
+  annualRetainer: z.coerce.number().int().min(0).optional().nullable(),
+  paymentStatus: z.string().optional().nullable(),
+  wonAt: z.string().datetime().optional().nullable(),
   estimatedProjectValue: z.string().optional().nullable(),
   priority: priority.optional(),
   outreachEmail: z.string().optional().nullable(),
@@ -54,6 +68,27 @@ const leadBody = z.object({
   accessIssue: z.string().optional().nullable(),
   accessIssueReason: z.string().optional().nullable(),
   lastCheckedAt: z.string().datetime().optional().nullable(),
+  cms: z.string().optional().nullable(),
+  analyticsGa4: z.boolean().optional(),
+  analyticsGtm: z.boolean().optional(),
+  analyticsMetaPixel: z.boolean().optional(),
+  bookingCalendly: z.boolean().optional(),
+  bookingSimplyBook: z.boolean().optional(),
+  bookingAcuity: z.boolean().optional(),
+  marketingMailchimp: z.boolean().optional(),
+  marketingHubspot: z.boolean().optional(),
+  marketingKlaviyo: z.boolean().optional(),
+  chatIntercom: z.boolean().optional(),
+  chatTawk: z.boolean().optional(),
+  chatZendesk: z.boolean().optional(),
+  generalEmail: z.string().optional().nullable(),
+  ownerEmail: z.string().optional().nullable(),
+  linkedinCompany: z.string().optional().nullable(),
+  instagram: z.string().optional().nullable(),
+  facebook: z.string().optional().nullable(),
+  whatsapp: z.string().optional().nullable(),
+  contactConfidence: z.coerce.number().int().min(0).max(100).optional().nullable(),
+  contactSource: z.string().optional().nullable(),
   recommendedFixes: z.any().optional(),
   issues: z.array(z.string()).optional()
 });
@@ -70,6 +105,7 @@ router.put(
           body: z.object({
             leadIds: z.array(z.string()).min(1),
             pipelineStage: pipelineStage.optional(),
+            status: status.optional(),
             assignedToUserId: z.string().optional().nullable(),
             reminderDate: z.string().datetime().optional().nullable()
           })
@@ -77,6 +113,20 @@ router.put(
         .parse(value)
   }),
   asyncHandler(leadController.bulkUpdate)
+);
+router.delete(
+  "/bulk",
+  validate({
+    parse: (value) =>
+      z
+        .object({
+          body: z.object({
+            leadIds: z.array(z.string()).min(1)
+          })
+        })
+        .parse(value)
+  }),
+  asyncHandler(leadController.bulkDelete)
 );
 router.post("/reprocess-opportunities", asyncHandler(leadController.reprocessAllOpportunities));
 router.get("/:id", asyncHandler(leadController.get));

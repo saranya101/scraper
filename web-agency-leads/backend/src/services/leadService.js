@@ -1,9 +1,11 @@
 import { prisma } from "../repositories/prisma.js";
 import { HttpError, notFound } from "../utils/httpError.js";
 import { normalizeWebsite, priorityFromAudit } from "../utils/priority.js";
+import { ensureDefaultCatalog } from "./catalogService.js";
 import * as serviceOpportunityService from "./serviceOpportunityService.js";
 
 const includeLead = {
+  industryRef: true,
   assignedTo: { select: { id: true, name: true, email: true } },
   issues: { orderBy: { createdAt: "asc" } },
   notes: {
@@ -35,6 +37,30 @@ const industryWorkspaceTerms = {
 
 export const pipelineStages = ["NOT_CONTACTED", "DRAFTED", "SENT", "REPLIED", "MEETING", "PROPOSAL", "WON", "LOST"];
 
+export function inferIndustrySlug(value = "") {
+  const haystack = String(value || "").toLowerCase();
+  if (/beauty|aesthetic|aesthetics|salon|\bspa\b|\bspas\b|nail|lash|skin|wellness/.test(haystack)) return "beauty-aesthetics";
+  if (/dental|dentist|orthodont/.test(haystack)) return "dental";
+  if (/clinic|medical|health|doctor|gp|specialist/.test(haystack)) return "medical-clinics";
+  if (/interior|renovation|design studio|home design/.test(haystack)) return "interior-design";
+  if (/home services|contractor|plumb|electric|clean|moving|roof|repair|hvac/.test(haystack)) return "home-services";
+  if (/restaurant|cafe|bar|food|bistro|dining/.test(haystack)) return "restaurants";
+  if (/legal|law|lawyer|attorney|solicitor/.test(haystack)) return "legal";
+  return "professional-services";
+}
+
+export async function resolveIndustryId(input = {}) {
+  if (input.industryId) return input.industryId;
+  const label = input.industry || input.company;
+  if (!label) return null;
+  await ensureDefaultCatalog();
+  const industries = await prisma.industry.findMany();
+  const normalized = String(label).toLowerCase();
+  const direct = industries.find((industry) => normalized.includes(industry.name.toLowerCase()) || normalized.includes(industry.slug.replaceAll("-", " ")));
+  const industry = direct || industries.find((item) => item.slug === inferIndustrySlug(`${input.industry || ""} ${input.company || ""}`));
+  return industry?.id || null;
+}
+
 function statusFromStage(stage) {
   if (stage === "NOT_CONTACTED" || stage === "DRAFTED") return "NOT_CONTACTED";
   if (stage === "REPLIED" || stage === "MEETING" || stage === "PROPOSAL") return "REPLIED";
@@ -44,23 +70,28 @@ function statusFromStage(stage) {
 
 export function industryWorkspaceWhere(slug) {
   const terms = industryWorkspaceTerms[slug];
-  if (!terms?.length) return {};
+  if (!terms?.length) return { industryRef: { slug } };
   return {
-    OR: terms.flatMap((term) => [
-      { industry: { contains: term, mode: "insensitive" } },
-      { company: { contains: term, mode: "insensitive" } }
-    ])
+    OR: [
+      { industryRef: { slug } },
+      ...terms.flatMap((term) => [
+        { industry: { contains: term, mode: "insensitive" } },
+        { company: { contains: term, mode: "insensitive" } }
+      ])
+    ]
   };
 }
 
-function leadData(input) {
+async function leadData(input) {
   const score = Number(input.score ?? 7);
+  const industryId = await resolveIndustryId(input);
   return {
     company: input.company,
     website: normalizeWebsite(input.website),
     phone: input.phone || null,
     address: input.address || null,
     industry: input.industry || null,
+    industryId,
     location: input.location || null,
     screenshotPath: input.screenshotPath || null,
     mobileScreenshotPath: input.mobileScreenshotPath || null,
@@ -70,7 +101,20 @@ function leadData(input) {
     trustScore: input.trustScore == null ? null : Number(input.trustScore),
     ctaScore: input.ctaScore == null ? null : Number(input.ctaScore),
     seoScore: input.seoScore == null ? null : Number(input.seoScore),
+    conversionScore: input.conversionScore == null ? null : Number(input.conversionScore),
+    speedScore: input.speedScore == null ? null : Number(input.speedScore),
+    bookingScore: input.bookingScore == null ? null : Number(input.bookingScore),
+    analyticsScore: input.analyticsScore == null ? null : Number(input.analyticsScore),
+    contactabilityScore: input.contactabilityScore == null ? null : Number(input.contactabilityScore),
     opportunityScore: input.opportunityScore == null ? null : Number(input.opportunityScore),
+    estimatedMinValue: input.estimatedMinValue == null ? null : Number(input.estimatedMinValue),
+    estimatedMaxValue: input.estimatedMaxValue == null ? null : Number(input.estimatedMaxValue),
+    actualRevenue: input.actualRevenue == null ? null : Number(input.actualRevenue),
+    profit: input.profit == null ? null : Number(input.profit),
+    monthlyRetainer: input.monthlyRetainer == null ? null : Number(input.monthlyRetainer),
+    annualRetainer: input.annualRetainer == null ? null : Number(input.annualRetainer),
+    paymentStatus: input.paymentStatus || null,
+    wonAt: input.wonAt ? new Date(input.wonAt) : null,
     estimatedProjectValue: input.estimatedProjectValue || null,
     priority: input.priority || priorityFromAudit(score, input.opportunityScore),
     outreachEmail: input.outreachEmail || null,
@@ -83,6 +127,27 @@ function leadData(input) {
     accessIssue: input.accessIssue || null,
     accessIssueReason: input.accessIssueReason || null,
     lastCheckedAt: input.lastCheckedAt || null,
+    cms: input.cms || null,
+    analyticsGa4: Boolean(input.analyticsGa4),
+    analyticsGtm: Boolean(input.analyticsGtm),
+    analyticsMetaPixel: Boolean(input.analyticsMetaPixel),
+    bookingCalendly: Boolean(input.bookingCalendly),
+    bookingSimplyBook: Boolean(input.bookingSimplyBook),
+    bookingAcuity: Boolean(input.bookingAcuity),
+    marketingMailchimp: Boolean(input.marketingMailchimp),
+    marketingHubspot: Boolean(input.marketingHubspot),
+    marketingKlaviyo: Boolean(input.marketingKlaviyo),
+    chatIntercom: Boolean(input.chatIntercom),
+    chatTawk: Boolean(input.chatTawk),
+    chatZendesk: Boolean(input.chatZendesk),
+    generalEmail: input.generalEmail || null,
+    ownerEmail: input.ownerEmail || null,
+    linkedinCompany: input.linkedinCompany || null,
+    instagram: input.instagram || null,
+    facebook: input.facebook || null,
+    whatsapp: input.whatsapp || null,
+    contactConfidence: input.contactConfidence == null ? null : Number(input.contactConfidence),
+    contactSource: input.contactSource || null,
     recommendedFixes: input.recommendedFixes || undefined
   };
 }
@@ -98,6 +163,7 @@ export async function listLeads(query) {
       OR: [
         { company: { contains: search, mode: "insensitive" } },
         { industry: { contains: search, mode: "insensitive" } },
+        { industryRef: { name: { contains: search, mode: "insensitive" } } },
         { location: { contains: search, mode: "insensitive" } },
         { address: { contains: search, mode: "insensitive" } },
         { website: { contains: search, mode: "insensitive" } },
@@ -116,13 +182,18 @@ export async function listLeads(query) {
     ...(query.reminders === "due" ? { reminderDate: { lte: new Date() } } : {}),
     ...(query.reminders === "upcoming" ? { reminderDate: { gt: new Date() } } : {}),
     ...(query.websiteStatus ? { websiteStatus: query.websiteStatus } : {}),
-    ...(query.industry ? { industry: { contains: query.industry, mode: "insensitive" } } : {}),
+    ...(query.industryId ? { industryId: query.industryId } : {}),
+    ...(query.industry && !query.industryId ? { industry: { contains: query.industry, mode: "insensitive" } } : {}),
     ...(query.serviceId ? { serviceOpportunities: { some: { serviceId: query.serviceId } } } : {}),
     ...(query.recommendedServiceId ? { serviceOpportunities: { some: { serviceId: query.recommendedServiceId, recommended: true } } } : {}),
     ...(query.minServiceScore ? { serviceOpportunities: { some: { score: { gte: Number(query.minServiceScore) } } } } : {}),
     ...(query.location ? { location: { contains: query.location, mode: "insensitive" } } : {}),
     ...(query.hasPhone === "true" ? { phone: { not: null } } : {}),
     ...(query.hasScreenshot === "true" ? { screenshotPath: { not: null } } : {}),
+    ...(query.missingAnalytics === "true" ? { analyticsGa4: false, analyticsGtm: false } : {}),
+    ...(query.missingBooking === "true" ? { bookingCalendly: false, bookingSimplyBook: false, bookingAcuity: false } : {}),
+    ...(query.cms ? { cms: query.cms } : {}),
+    ...(query.withoutMetaPixel === "true" ? { analyticsMetaPixel: false } : {}),
     ...(query.minScore ? { score: { gte: Number(query.minScore) } } : {}),
     ...(query.maxScore ? { score: { ...(query.minScore ? { gte: Number(query.minScore) } : {}), lte: Number(query.maxScore) } } : {})
   };
@@ -139,6 +210,7 @@ export async function listLeads(query) {
       skip: (page - 1) * pageSize,
       take: pageSize,
       include: {
+        industryRef: true,
         issues: true,
         serviceOpportunities: {
           where: { recommended: true },
@@ -191,13 +263,17 @@ export async function listPipeline(query = {}) {
 }
 
 export async function getLead(id) {
-  const lead = await prisma.lead.findUnique({ where: { id }, include: includeLead });
+  let lead = await prisma.lead.findUnique({ where: { id }, include: includeLead });
   if (!lead) throw notFound("Lead not found");
+  if (!lead.serviceOpportunities?.length) {
+    await serviceOpportunityService.generateForLead(id);
+    lead = await prisma.lead.findUnique({ where: { id }, include: includeLead });
+  }
   return lead;
 }
 
 export async function createLead(input) {
-  const data = leadData(input);
+  const data = await leadData(input);
   const issues = Array.isArray(input.issues) ? input.issues.filter(Boolean) : [];
   try {
     const lead = await prisma.lead.create({
@@ -225,7 +301,7 @@ export async function updateLead(id, input, userId) {
   const current = await prisma.lead.findUnique({ where: { id } });
   if (!current) throw notFound("Lead not found");
 
-  const data = leadData({ ...current, ...input });
+  const data = await leadData({ ...current, ...input });
   const statusChanged = input.status && input.status !== current.status;
 
   await prisma.$transaction(async (tx) => {
@@ -332,6 +408,10 @@ export async function bulkUpdate(input, userId) {
     data.pipelineStage = input.pipelineStage;
     data.status = statusFromStage(input.pipelineStage);
   }
+  if (input.status) {
+    data.status = input.status;
+    if (input.status === "ARCHIVED") data.pipelineStage = "LOST";
+  }
   if (Object.prototype.hasOwnProperty.call(input, "assignedToUserId")) data.assignedToUserId = input.assignedToUserId || null;
   if (Object.prototype.hasOwnProperty.call(input, "reminderDate")) data.reminderDate = input.reminderDate ? new Date(input.reminderDate) : null;
   if (!Object.keys(data).length) throw new HttpError(422, "No update selected");
@@ -351,9 +431,28 @@ export async function bulkUpdate(input, userId) {
         }))
       });
     }
+    if (input.status) {
+      await tx.leadStatusHistory.createMany({
+        data: leads.map((lead) => ({
+          leadId: lead.id,
+          userId,
+          oldStatus: lead.status,
+          newStatus: input.status,
+          oldStage: lead.pipelineStage,
+          newStage: data.pipelineStage || lead.pipelineStage
+        }))
+      });
+    }
   });
 
   return { updated: leads.length };
+}
+
+export async function bulkDelete(input) {
+  const ids = Array.isArray(input.leadIds) ? input.leadIds.filter(Boolean) : [];
+  if (!ids.length) throw new HttpError(422, "Select at least one lead");
+  const result = await prisma.lead.deleteMany({ where: { id: { in: ids } } });
+  return { deleted: result.count };
 }
 
 export async function deleteLead(id) {
@@ -377,6 +476,22 @@ export async function listNotes(leadId) {
   });
 }
 
+export async function updateNote(id, userId, note) {
+  const existing = await prisma.leadNote.findUnique({ where: { id } });
+  if (!existing) throw notFound("Note not found");
+  return prisma.leadNote.update({
+    where: { id },
+    data: { note },
+    include: { user: { select: { id: true, name: true, email: true } } }
+  });
+}
+
+export async function deleteNote(id) {
+  const existing = await prisma.leadNote.findUnique({ where: { id } });
+  if (!existing) throw notFound("Note not found");
+  await prisma.leadNote.delete({ where: { id } });
+}
+
 export async function reprocessOpportunities(id) {
   await getLead(id);
   return serviceOpportunityService.generateForLead(id);
@@ -392,4 +507,17 @@ export async function getMeta() {
     prisma.user.findMany({ select: { id: true, name: true, email: true }, orderBy: { name: "asc" } })
   ]);
   return { ...catalog, users, pipelineStages };
+}
+
+export async function syncLeadIndustries(force = false) {
+  const leads = await prisma.lead.findMany({ select: { id: true, company: true, industry: true, industryId: true } });
+  let linked = 0;
+  for (const lead of leads) {
+    if (lead.industryId && !force) continue;
+    const industryId = await resolveIndustryId({ company: lead.company, industry: lead.industry });
+    if (!industryId) continue;
+    await prisma.lead.update({ where: { id: lead.id }, data: { industryId } });
+    linked += 1;
+  }
+  return { linked };
 }

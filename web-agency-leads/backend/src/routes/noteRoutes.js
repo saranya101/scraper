@@ -22,5 +22,19 @@ router.post(
   asyncHandler(noteController.create)
 );
 router.get("/:leadId", asyncHandler(noteController.list));
+router.put(
+  "/:id",
+  validate({
+    parse: (value) =>
+      z
+        .object({
+          params: z.object({ id: z.string().min(1) }),
+          body: z.object({ note: z.string().min(1) })
+        })
+        .parse(value)
+  }),
+  asyncHandler(noteController.update)
+);
+router.delete("/:id", asyncHandler(noteController.remove));
 
 export default router;

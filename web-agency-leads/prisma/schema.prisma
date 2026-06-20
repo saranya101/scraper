@@ -75,6 +75,7 @@ enum ScreenshotType {
 enum OutreachType {
   EMAIL
   LINKEDIN_DM
+  COLD_CALL
   FOLLOW_UP_1
   FOLLOW_UP_2
 }
@@ -113,6 +114,7 @@ model User {
   outreachDrafts OutreachDraft[]
   automationSchedules AutomationSchedule[]
   automationNotifications AutomationNotification[]
+  settingsUpdates AppSetting[]       @relation("SettingUpdater")
   createdAt     DateTime            @default(now())
   updatedAt     DateTime            @updatedAt
 
@@ -126,6 +128,8 @@ model Lead {
   phone          String?
   address        String?
   industry       String?
+  industryId     String?
+  industryRef    Industry?           @relation(fields: [industryId], references: [id], onDelete: SetNull)
   location       String?
   screenshotPath String?
   mobileScreenshotPath String?
@@ -135,7 +139,20 @@ model Lead {
   trustScore        Int?
   ctaScore          Int?
   seoScore          Int?
+  conversionScore   Int?
+  speedScore        Int?
+  bookingScore      Int?
+  analyticsScore    Int?
+  contactabilityScore Int?
   opportunityScore  Int?
+  estimatedMinValue Int?
+  estimatedMaxValue Int?
+  actualRevenue     Int?
+  profit            Int?
+  monthlyRetainer   Int?
+  annualRetainer    Int?
+  paymentStatus     String?
+  wonAt             DateTime?
   estimatedProjectValue String?
   priority       LeadPriority        @default(COLD)
   outreachEmail  String?             @db.Text
@@ -149,6 +166,27 @@ model Lead {
   accessIssue    String?
   accessIssueReason String?          @db.Text
   lastCheckedAt  DateTime?
+  cms            String?
+  analyticsGa4   Boolean             @default(false)
+  analyticsGtm   Boolean             @default(false)
+  analyticsMetaPixel Boolean          @default(false)
+  bookingCalendly Boolean            @default(false)
+  bookingSimplyBook Boolean          @default(false)
+  bookingAcuity Boolean              @default(false)
+  marketingMailchimp Boolean         @default(false)
+  marketingHubspot Boolean           @default(false)
+  marketingKlaviyo Boolean           @default(false)
+  chatIntercom   Boolean             @default(false)
+  chatTawk       Boolean             @default(false)
+  chatZendesk    Boolean             @default(false)
+  generalEmail   String?
+  ownerEmail     String?
+  linkedinCompany String?
+  instagram      String?
+  facebook       String?
+  whatsapp       String?
+  contactConfidence Int?
+  contactSource  String?
   recommendedFixes Json?
   issues         LeadIssue[]
   notes          LeadNote[]
@@ -162,6 +200,7 @@ model Lead {
 
   @@index([company])
   @@index([industry])
+  @@index([industryId])
   @@index([location])
   @@index([status])
   @@index([pipelineStage])
@@ -169,6 +208,13 @@ model Lead {
   @@index([reminderDate])
   @@index([priority])
   @@index([websiteStatus])
+  @@index([cms])
+  @@index([analyticsGa4])
+  @@index([analyticsGtm])
+  @@index([analyticsMetaPixel])
+  @@index([bookingCalendly])
+  @@index([bookingSimplyBook])
+  @@index([bookingAcuity])
   @@map("leads")
 }
 
@@ -177,10 +223,17 @@ model Industry {
   name        String
   slug        String               @unique
   description String?              @db.Text
+  defaultKeywords String?           @db.Text
+  auditCriteria String?             @db.Text
+  recommendedServiceIds Json?
+  workspaceSections Json?
+  enabled     Boolean              @default(true)
   scoringRule IndustryScoringRule?
+  leads       Lead[]
   createdAt   DateTime             @default(now())
   updatedAt   DateTime             @updatedAt
 
+  @@index([enabled])
   @@map("industries")
 }
 
@@ -191,11 +244,24 @@ model AgencyService {
   description String?              @db.Text
   baseMinValue Int
   baseMaxValue Int
+  enabled     Boolean              @default(true)
   opportunities ServiceOpportunity[]
   createdAt   DateTime             @default(now())
   updatedAt   DateTime             @updatedAt
 
+  @@index([enabled])
   @@map("services")
+}
+
+model AppSetting {
+  key       String   @id
+  value     Json
+  updatedBy String?
+  user      User?    @relation("SettingUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("app_settings")
 }
 
 model IndustryScoringRule {
@@ -225,6 +291,7 @@ model ServiceOpportunity {
   score             Int
   estimatedMinValue Int
   estimatedMaxValue Int
+  confidence        Int?
   reason            String        @db.Text
   recommended       Boolean       @default(false)
   createdAt         DateTime      @default(now())
@@ -322,6 +389,9 @@ model Import {
   importedBy String
   user       User     @relation(fields: [importedBy], references: [id], onDelete: Cascade)
   totalRows  Int
+  importedRows Int     @default(0)
+  duplicateRows Int    @default(0)
+  failedRows Int       @default(0)
   createdAt  DateTime @default(now())
 
   @@map("imports")
@@ -345,10 +415,18 @@ model ScanJob {
   keyword     String
   location    String
   maxResults  Int          @default(10)
+  scanMode    String        @default("GOOGLE_PLACES")
+  directUrls  Json?
   status      ScanJobStatus @default(PENDING)
   createdBy   String
   user        User          @relation(fields: [createdBy], references: [id], onDelete: Cascade)
   progress    Int           @default(0)
+  currentStage String?
+  progressPercent Int       @default(0)
+  totalItems  Int           @default(0)
+  completedItems Int        @default(0)
+  failedItems Int           @default(0)
+  currentUrl  String?
   logs        Json?
   retryCount  Int           @default(0)
   startedAt   DateTime?
@@ -364,6 +442,7 @@ model ScanJob {
   completedAt DateTime?
 
   @@index([status])
+  @@index([scanMode])
   @@map("scan_jobs")
 }
 
@@ -383,6 +462,11 @@ model ScanResult {
   trustScore           Int?
   ctaScore             Int?
   seoScore             Int?
+  conversionScore      Int?
+  speedScore           Int?
+  bookingScore         Int?
+  analyticsScore       Int?
+  contactabilityScore  Int?
   opportunityScore     Int?
   estimatedProjectValue String?
   priority             LeadPriority  @default(COLD)
@@ -402,6 +486,27 @@ model ScanResult {
   extractedPhones      Json?
   contactPageUrl       String?
   rawExtractedData     Json?
+  cms                  String?
+  analyticsGa4         Boolean       @default(false)
+  analyticsGtm         Boolean       @default(false)
+  analyticsMetaPixel   Boolean       @default(false)
+  bookingCalendly      Boolean       @default(false)
+  bookingSimplyBook    Boolean       @default(false)
+  bookingAcuity        Boolean       @default(false)
+  marketingMailchimp   Boolean       @default(false)
+  marketingHubspot     Boolean       @default(false)
+  marketingKlaviyo     Boolean       @default(false)
+  chatIntercom         Boolean       @default(false)
+  chatTawk             Boolean       @default(false)
+  chatZendesk          Boolean       @default(false)
+  generalEmail         String?
+  ownerEmail           String?
+  linkedinCompany      String?
+  instagram            String?
+  facebook             String?
+  whatsapp             String?
+  contactConfidence    Int?
+  contactSource        String?
   screenshotPath       String?
   mobileScreenshotPath String?
   issues               Json?
@@ -445,12 +550,34 @@ model AutomationSchedule {
   createdBy   String
   user        User                @relation(fields: [createdBy], references: [id], onDelete: Cascade)
   notifications AutomationNotification[]
+  runs        AutomationRun[]
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
 
   @@index([enabled])
   @@index([nextRunAt])
   @@map("automation_schedules")
+}
+
+model AutomationRun {
+  id          String              @id @default(cuid())
+  scheduleId  String
+  schedule    AutomationSchedule  @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  scanJobId   String?
+  currentStage String?
+  progressPercent Int            @default(0)
+  totalItems  Int                @default(0)
+  completedItems Int             @default(0)
+  failedItems Int                @default(0)
+  currentUrl  String?
+  logs        Json?
+  startedAt   DateTime           @default(now())
+  completedAt DateTime?
+  createdAt   DateTime           @default(now())
+
+  @@index([scheduleId])
+  @@index([scanJobId])
+  @@map("automation_runs")
 }
 
 model AutomationNotification {

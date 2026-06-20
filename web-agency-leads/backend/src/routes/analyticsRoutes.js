@@ -10,6 +10,7 @@ const analyticsQuery = z.object({
   startDate: z.string().datetime().optional().or(z.string().date().optional()),
   endDate: z.string().datetime().optional().or(z.string().date().optional()),
   industry: z.string().optional(),
+  industryId: z.string().optional(),
   serviceId: z.string().optional(),
   location: z.string().optional()
 });

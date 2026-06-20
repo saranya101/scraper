@@ -1,4 +1,4 @@
-import { BarChart3, Filter, TrendingDown, TrendingUp } from "lucide-react";
+import { BarChart3, Clock3, DollarSign, Filter, TrendingUp } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Badge } from "../components/ui/Badge.jsx";
 import { Button } from "../components/ui/Button.jsx";
@@ -17,6 +17,23 @@ const metricCards = [
   ["averageOpportunityScore", "Avg opportunity"]
 ];
 
+const revenueCards = [
+  ["estimatedPipeline", "Estimated pipeline"],
+  ["weightedPipeline", "Weighted pipeline"],
+  ["wonRevenue", "Won revenue"],
+  ["profit", "Profit"],
+  ["monthlyRecurringRevenue", "Monthly recurring revenue"],
+  ["annualRecurringRevenue", "Annual recurring revenue"],
+  ["averageDealSize", "Average deal size"]
+];
+
+const timeCards = [
+  ["avgTimeToReplied", "Avg time to reply"],
+  ["avgTimeToMeeting", "Avg time to meeting"],
+  ["avgTimeToProposal", "Avg time to proposal"],
+  ["avgTimeToWon", "Avg time to won"]
+];
+
 function todayMinus(days) {
   const date = new Date();
   date.setDate(date.getDate() - days);
@@ -29,16 +46,21 @@ function formatValue(value, prefixOrSuffix) {
   return value ?? 0;
 }
 
+function formatDays(value) {
+  return `${Number(value || 0).toLocaleString()} days`;
+}
+
 function BarList({ items, labelKey, valueKey = "total", tone = "slate" }) {
   const max = Math.max(...items.map((item) => Number(item[valueKey] || 0)), 1);
   const color = tone === "green" ? "bg-emerald-500" : tone === "rose" ? "bg-rose-500" : "bg-slate-950";
+  const isMoney = valueKey.toLowerCase().includes("pipeline") || valueKey.toLowerCase().includes("revenue");
   return (
     <div className="space-y-3">
       {items.map((item) => (
         <div key={item[labelKey]} className="rounded-2xl border border-slate-200 bg-white p-4">
           <div className="mb-2 flex items-center justify-between gap-3">
             <p className="truncate text-sm font-semibold">{item[labelKey]}</p>
-            <span className="text-sm text-slate-500">{item[valueKey] || 0}</span>
+            <span className="text-sm text-slate-500">{isMoney ? formatValue(item[valueKey], "$") : item[valueKey] || 0}</span>
           </div>
           <div className="h-2 overflow-hidden rounded-full bg-slate-100">
             <div className={`h-full rounded-full ${color}`} style={{ width: `${Math.max((Number(item[valueKey] || 0) / max) * 100, 4)}%` }} />
@@ -59,11 +81,11 @@ export default function AnalyticsPage() {
   const { push } = useToast();
   const [catalog, setCatalog] = useState({ industries: [], services: [] });
   const [overview, setOverview] = useState({});
-  const [industries, setIndustries] = useState({ items: [], best: [], worst: [] });
+  const [industries, setIndustries] = useState({ items: [], best: [] });
   const [services, setServices] = useState({ items: [] });
   const [locations, setLocations] = useState({ items: [] });
   const [funnel, setFunnel] = useState([]);
-  const [filters, setFilters] = useState({ startDate: todayMinus(30), endDate: new Date().toISOString().slice(0, 10), industry: "", serviceId: "", location: "" });
+  const [filters, setFilters] = useState({ startDate: todayMinus(30), endDate: new Date().toISOString().slice(0, 10), industryId: "", industry: "", serviceId: "", location: "" });
   const [loading, setLoading] = useState(true);
 
   const params = useMemo(() => Object.fromEntries(Object.entries(filters).filter(([, value]) => value)), [filters]);
@@ -117,9 +139,12 @@ export default function AnalyticsPage() {
         <div className="grid gap-3 md:grid-cols-5">
           <Input type="date" value={filters.startDate} onChange={(e) => setFilters({ ...filters, startDate: e.target.value })} />
           <Input type="date" value={filters.endDate} onChange={(e) => setFilters({ ...filters, endDate: e.target.value })} />
-          <Select value={filters.industry} onChange={(e) => setFilters({ ...filters, industry: e.target.value })}>
+          <Select value={filters.industryId} onChange={(e) => {
+            const industry = catalog.industries.find((item) => item.id === e.target.value);
+            setFilters({ ...filters, industryId: e.target.value, industry: industry?.name || "" });
+          }}>
             <option value="">All industries</option>
-            {catalog.industries.map((industry) => <option key={industry.id} value={industry.name}>{industry.name}</option>)}
+            {catalog.industries.map((industry) => <option key={industry.id} value={industry.id}>{industry.name}</option>)}
           </Select>
           <Select value={filters.serviceId} onChange={(e) => setFilters({ ...filters, serviceId: e.target.value })}>
             <option value="">All services</option>
@@ -139,6 +164,36 @@ export default function AnalyticsPage() {
       </div>
 
       <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="mb-5 flex items-center gap-2">
+          <DollarSign size={18} />
+          <h2 className="text-lg font-semibold">Revenue dashboard</h2>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {revenueCards.map(([key, label]) => (
+            <div key={key} className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</p>
+              <p className="mt-3 text-3xl font-semibold tracking-tight">{formatValue(overview[key], "$")}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="mb-5 flex items-center gap-2">
+          <Clock3 size={18} />
+          <h2 className="text-lg font-semibold">Time-to-close statistics</h2>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {timeCards.map(([key, label]) => (
+            <div key={key} className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</p>
+              <p className="mt-3 text-3xl font-semibold tracking-tight">{formatDays(overview[key])}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="mb-5 text-lg font-semibold">Pipeline funnel</h2>
         <div className="grid gap-3 md:grid-cols-7">
           {funnel.map((stage) => (
@@ -156,12 +211,12 @@ export default function AnalyticsPage() {
 
       <div className="grid gap-6 xl:grid-cols-2">
         <section className="rounded-3xl border border-slate-200 bg-slate-50 p-5 shadow-sm">
-          <h2 className="mb-4 text-lg font-semibold">Charts by industry</h2>
-          <BarList items={industries.items} labelKey="industry" />
+          <h2 className="mb-4 text-lg font-semibold">Industry revenue</h2>
+          <BarList items={industries.items} labelKey="industry" valueKey="estimatedPipeline" />
         </section>
         <section className="rounded-3xl border border-slate-200 bg-slate-50 p-5 shadow-sm">
-          <h2 className="mb-4 text-lg font-semibold">Charts by service</h2>
-          <BarList items={services.items} labelKey="service" valueKey="estimatedPipelineValue" tone="green" />
+          <h2 className="mb-4 text-lg font-semibold">Service revenue</h2>
+          <BarList items={services.items} labelKey="service" valueKey="estimatedPipeline" tone="green" />
         </section>
       </div>
 
@@ -172,16 +227,10 @@ export default function AnalyticsPage() {
         </div>
       </section>
 
-      <div className="grid gap-6 xl:grid-cols-2">
-        <section className="rounded-3xl border border-emerald-200 bg-emerald-50 p-5 shadow-sm">
-          <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-emerald-950"><TrendingUp size={18} /> Best performing niches</h2>
-          <BarList items={industries.best} labelKey="industry" tone="green" />
-        </section>
-        <section className="rounded-3xl border border-rose-200 bg-rose-50 p-5 shadow-sm">
-          <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-rose-950"><TrendingDown size={18} /> Worst performing niches</h2>
-          <BarList items={industries.worst} labelKey="industry" tone="rose" />
-        </section>
-      </div>
+      <section className="rounded-3xl border border-emerald-200 bg-emerald-50 p-5 shadow-sm">
+        <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-emerald-950"><TrendingUp size={18} /> Best performing niches</h2>
+        <BarList items={industries.best} labelKey="industry" tone="green" />
+      </section>
 
       {loading && <p className="text-sm text-slate-500">Refreshing analytics...</p>}
     </div>

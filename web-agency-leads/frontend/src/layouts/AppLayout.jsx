@@ -1,8 +1,9 @@
-import { BarChart3, ChartNoAxesCombined, Clock3, DatabaseZap, KanbanSquare, Layers3, LogOut, MailPlus, Menu, Radar, Search, Sparkles, UsersRound, X } from "lucide-react";
-import { useState } from "react";
+import { BarChart3, ChartNoAxesCombined, Clock3, DatabaseZap, KanbanSquare, Layers3, LogOut, MailPlus, Menu, Moon, Radar, Search, Settings, Sparkles, Sun, UsersRound, X } from "lucide-react";
+import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { Button } from "../components/ui/Button.jsx";
 import { useAuth } from "../hooks/useAuth.jsx";
+import { api } from "../services/api.js";
 import { initials } from "../utils/format.js";
 import { workspaceNav } from "../utils/workspaces.js";
 
@@ -14,11 +15,14 @@ const navItems = [
   { to: "/automation", label: "Automation", icon: Clock3 },
   { to: "/workspaces", label: "Workspaces", icon: Layers3 },
   { to: "/scanner", label: "Scanner", icon: Radar },
-  { to: "/imports", label: "Imports", icon: DatabaseZap }
+  { to: "/imports", label: "Imports", icon: DatabaseZap },
+  { to: "/settings", label: "Settings", icon: Settings }
 ];
 
 export default function AppLayout() {
   const [open, setOpen] = useState(false);
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem("theme") === "dark");
+  const [industries, setIndustries] = useState(workspaceNav.map((item) => ({ slug: item.slug, name: item.label })));
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
@@ -26,6 +30,17 @@ export default function AppLayout() {
     await logout();
     navigate("/login");
   }
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", darkMode);
+    localStorage.setItem("theme", darkMode ? "dark" : "light");
+  }, [darkMode]);
+
+  useEffect(() => {
+    api.get("/leads/meta/catalog")
+      .then(({ data }) => setIndustries((data.industries || []).map((item) => ({ slug: item.slug, name: item.name }))))
+      .catch(() => {});
+  }, []);
 
   const sidebar = (
     <aside className="flex h-full min-h-0 flex-col bg-[#080b12] p-4 text-white">
@@ -59,7 +74,7 @@ export default function AppLayout() {
         <div className="mt-7">
           <p className="px-3 text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">Industries</p>
           <nav className="mt-3 space-y-1">
-            {workspaceNav.map((item) => (
+            {industries.map((item) => (
               <NavLink
                 key={item.slug}
                 to={`/workspaces/${item.slug}`}
@@ -70,7 +85,7 @@ export default function AppLayout() {
                   }`
                 }
               >
-                {item.label}
+                {item.name || item.label}
               </NavLink>
             ))}
           </nav>
@@ -92,7 +107,7 @@ export default function AppLayout() {
   );
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-950">
+    <div className="min-h-screen bg-slate-50 text-slate-950 transition-colors dark:bg-slate-950 dark:text-slate-50">
       <div className="fixed inset-y-0 left-0 z-30 hidden w-72 lg:block">{sidebar}</div>
       {open && (
         <div className="fixed inset-0 z-40 lg:hidden">
@@ -101,7 +116,7 @@ export default function AppLayout() {
         </div>
       )}
       <main className="lg:pl-72">
-        <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-slate-50/85 px-4 py-3 backdrop-blur md:px-8">
+        <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-slate-50/85 px-4 py-3 backdrop-blur dark:border-slate-800 dark:bg-slate-950/85 md:px-8">
           <div className="flex items-center gap-3">
             <button className="rounded-lg p-2 hover:bg-slate-100 lg:hidden" onClick={() => setOpen(true)} aria-label="Open menu">
               <Menu size={20} />
@@ -114,6 +129,13 @@ export default function AppLayout() {
               <UsersRound size={16} className="text-slate-400" />
               <span className="hidden font-medium sm:inline">Admin workspace</span>
             </div>
+            <button
+              className="rounded-full bg-white p-2 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-100 dark:bg-slate-900 dark:ring-slate-700 dark:hover:bg-slate-800"
+              onClick={() => setDarkMode((value) => !value)}
+              aria-label="Toggle dark mode"
+            >
+              {darkMode ? <Sun size={17} /> : <Moon size={17} />}
+            </button>
             {open && (
               <button className="rounded-lg p-2 hover:bg-slate-100" onClick={() => setOpen(false)} aria-label="Close menu">
                 <X size={20} />

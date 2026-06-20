@@ -15,5 +15,10 @@ const upload = multer({
 });
 
 router.post("/upload", upload.single("file"), asyncHandler(importController.upload));
+router.post("/preview", upload.single("file"), asyncHandler(importController.preview));
+router.put("/preview/:sessionId", asyncHandler(importController.updatePreview));
+router.post("/commit/:sessionId", asyncHandler(importController.commit));
+router.post("/cancel/:sessionId", asyncHandler(importController.cancel));
+router.get("/history", asyncHandler(importController.history));
 
 export default router;

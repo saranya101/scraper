@@ -36,6 +36,12 @@ router.put(
 );
 router.delete("/schedules/:id", asyncHandler(automationController.removeSchedule));
 router.post("/run/:id", asyncHandler(automationController.run));
+router.post("/pause/:id", asyncHandler(automationController.pause));
+router.post("/finish/:id", asyncHandler(automationController.finish));
+router.get("/dashboard", asyncHandler(automationController.dashboard));
+router.get("/performance", asyncHandler(automationController.performance));
+router.get("/diagnostics", asyncHandler(automationController.diagnostics));
+router.get("/runs/:id/progress", asyncHandler(automationController.runProgress));
 router.get("/notifications", asyncHandler(automationController.notifications));
 router.put("/notifications/:id/read", asyncHandler(automationController.readNotification));
 

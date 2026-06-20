@@ -1,4 +1,5 @@
 import { prisma } from "../repositories/prisma.js";
+import { ensureDefaultCatalog } from "./catalogService.js";
 
 function slugify(value) {
   return String(value || "")
@@ -31,7 +32,12 @@ function inferIndustrySlug(lead, industries) {
 }
 
 async function getIndustryContext(lead) {
+  await ensureDefaultCatalog();
   const industries = await prisma.industry.findMany({ include: { scoringRule: true } });
+  if (lead.industryId) {
+    const linked = industries.find((industry) => industry.id === lead.industryId);
+    if (linked) return linked;
+  }
   const slug = inferIndustrySlug(lead, industries);
   return industries.find((industry) => industry.slug === slug) || industries.find((industry) => industry.slug === "professional-services");
 }
@@ -84,6 +90,7 @@ function valueEstimate(service, score) {
 }
 
 export async function generateForLead(leadId) {
+  await ensureDefaultCatalog();
   const lead = await prisma.lead.findUnique({
     where: { id: leadId },
     include: { issues: true }
@@ -91,7 +98,7 @@ export async function generateForLead(leadId) {
   if (!lead) return [];
 
   const [services, industry] = await Promise.all([
-    prisma.agencyService.findMany({ orderBy: { name: "asc" } }),
+    prisma.agencyService.findMany({ where: { enabled: true }, orderBy: { name: "asc" } }),
     getIndustryContext(lead)
   ]);
   const rule = industry?.scoringRule;
@@ -107,6 +114,7 @@ export async function generateForLead(leadId) {
           score,
           ...values,
           reason: reasonFor(service, score, lead, industry),
+          confidence: Math.min(95, Math.max(45, 50 + score * 5 + (lead.opportunityScore || 0))),
           recommended: false
         }
       };
@@ -138,9 +146,10 @@ export async function generateForAllLeads() {
 }
 
 export async function getCatalog() {
+  await ensureDefaultCatalog();
   const [industries, services] = await Promise.all([
-    prisma.industry.findMany({ include: { scoringRule: true }, orderBy: { name: "asc" } }),
-    prisma.agencyService.findMany({ orderBy: { name: "asc" } })
+    prisma.industry.findMany({ where: { enabled: true }, include: { scoringRule: true }, orderBy: { name: "asc" } }),
+    prisma.agencyService.findMany({ where: { enabled: true }, orderBy: { name: "asc" } })
   ]);
   return { industries, services };
 }

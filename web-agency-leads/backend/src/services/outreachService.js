@@ -2,17 +2,29 @@ import OpenAI from "openai";
 import { prisma } from "../repositories/prisma.js";
 import { HttpError, notFound } from "../utils/httpError.js";
 
-const outreachTypes = ["EMAIL", "LINKEDIN_DM", "FOLLOW_UP_1", "FOLLOW_UP_2"];
+const outreachTypes = ["EMAIL", "LINKEDIN_DM", "COLD_CALL", "FOLLOW_UP_1", "FOLLOW_UP_2"];
+const storedOutreachTypes = ["EMAIL", "LINKEDIN_DM", "FOLLOW_UP_1", "FOLLOW_UP_2"];
 const statuses = ["DRAFT", "SAVED", "COPIED", "SENT", "ARCHIVED"];
+const coldCallPrefix = "[Cold call]";
 
 function labelType(type) {
   return {
     EMAIL: "Email",
     LINKEDIN_DM: "LinkedIn DM",
+    COLD_CALL: "Cold call",
     FOLLOW_UP_1: "Follow-up 1",
     FOLLOW_UP_2: "Follow-up 2"
   }[type] || "Email";
 }
+
+const leadInclude = {
+  industryRef: true,
+  serviceOpportunities: {
+    where: { recommended: true },
+    include: { service: true },
+    take: 1
+  }
+};
 
 function fallbackDraft(lead, type, tone) {
   const service = lead.serviceOpportunities?.[0];
@@ -26,10 +38,31 @@ function fallbackDraft(lead, type, tone) {
     : "";
   const opener = `I was looking at ${lead.company}'s website and noticed ${issue}.`;
   const pitch = `We help ${lead.industry || "local businesses"} turn those gaps into clearer pages, stronger calls to action, and more qualified enquiries.${competitorAngle} Based on the audit, ${serviceName} looks like the strongest first move${service ? ` because ${service.reason}` : "."}`;
+  const isColdCall = type === "COLD_CALL";
   const cta = type === "LINKEDIN_DM"
     ? "Worth a quick chat this week?"
-    : "Would it be useful if I sent over 2-3 specific ideas for improving the site?";
+    : isColdCall
+      ? "Would it be alright if I sent the quick notes over by email?"
+      : "Would it be useful if I sent over 2-3 specific ideas for improving the site?";
   const subject = type === "EMAIL" ? `Quick idea for ${lead.company}` : null;
+  if (isColdCall) {
+    return {
+      subject: null,
+      opener: `Hi, is this the right person to speak with about ${lead.company}'s website?`,
+      pitch: `I was reviewing local ${lead.industry || "business"} websites and noticed ${issue}. We help teams turn those gaps into clearer pages, stronger trust signals, and more enquiries. ${serviceName} looks like the strongest first move${service ? ` because ${service.reason}` : "."}`,
+      cta,
+      fullMessage: [
+        `Hi, is this the right person to speak with about ${lead.company}'s website?`,
+        "",
+        `I was reviewing local ${lead.industry || "business"} websites and noticed ${issue}.`,
+        "",
+        `We help teams turn those gaps into clearer pages, stronger trust signals, and more enquiries. ${serviceName} looks like the strongest first move${service ? ` because ${service.reason}` : "."}`,
+        "",
+        cta
+      ].join("\n"),
+      tone
+    };
+  }
   return {
     subject,
     opener,
@@ -37,6 +70,43 @@ function fallbackDraft(lead, type, tone) {
     cta,
     fullMessage: [subject ? `Subject: ${subject}` : null, opener, "", pitch, "", cta].filter((part) => part !== null).join("\n"),
     tone
+  };
+}
+
+function normalizeGeneratedDraft(generated, lead, type, tone) {
+  const fallback = fallbackDraft(lead, type, tone);
+  const subject = type === "EMAIL" ? (generated.subject || fallback.subject || "") : "";
+  const opener = generated.opener || fallback.opener || "";
+  const pitch = generated.pitch || fallback.pitch || "";
+  const cta = generated.cta || fallback.cta || "";
+  const fullMessage = generated.fullMessage || fallback.fullMessage || [subject ? `Subject: ${subject}` : null, opener, "", pitch, "", cta].filter((part) => part !== null).join("\n");
+  return {
+    subject,
+    opener,
+    pitch,
+    cta,
+    fullMessage,
+    tone
+  };
+}
+
+function storageType(type) {
+  if (storedOutreachTypes.includes(type)) return type;
+  return "FOLLOW_UP_2";
+}
+
+function storageSubject(type, subject) {
+  if (type !== "COLD_CALL") return subject || null;
+  return subject ? `${coldCallPrefix} ${subject}` : coldCallPrefix;
+}
+
+function displayDraft(draft) {
+  if (!draft) return draft;
+  const isColdCall = draft.subject?.startsWith(coldCallPrefix);
+  return {
+    ...draft,
+    type: isColdCall ? "COLD_CALL" : draft.type,
+    subject: isColdCall ? draft.subject.replace(coldCallPrefix, "").trim() : draft.subject
   };
 }
 
@@ -70,14 +140,14 @@ ${competitors}
 
 Return strict JSON:
 {
-  "subject": "email subject or empty string for non-email",
+  "subject": "email subject or empty string for non-email or cold call",
   "opener": "personalized opener",
   "pitch": "short pitch tied to audit issue and recommended service",
   "cta": "low-friction CTA",
   "fullMessage": "complete ready-to-copy message"
 }
 
-Keep it natural, specific, and not spammy. If competitor data exists, use it as the sales angle without naming competitors directly unless it feels natural. Do not mention AI or automated scanning.`;
+Keep it natural, specific, and not spammy. For cold calls, write a spoken call script with short sentences. If competitor data exists, use it as the sales angle without naming competitors directly unless it feels natural. Do not mention AI or automated scanning.`;
 }
 
 async function generateWithOpenAI(context) {
@@ -123,14 +193,19 @@ export async function generateDraft(leadId, userId, input = {}) {
   const type = outreachTypes.includes(input.type) ? input.type : "EMAIL";
   const tone = input.tone || "consultative";
   const lead = await leadContext(leadId);
-  const generated = await generateWithOpenAI({ lead, type, tone }).catch(() => fallbackDraft(lead, type, tone));
+  const generated = normalizeGeneratedDraft(
+    await generateWithOpenAI({ lead, type, tone }).catch(() => fallbackDraft(lead, type, tone)),
+    lead,
+    type,
+    tone
+  );
 
   const draft = await prisma.outreachDraft.create({
     data: {
       leadId,
       userId,
-      type,
-      subject: generated.subject || null,
+      type: storageType(type),
+      subject: storageSubject(type, generated.subject),
       opener: generated.opener || "",
       pitch: generated.pitch || "",
       cta: generated.cta || "",
@@ -138,7 +213,7 @@ export async function generateDraft(leadId, userId, input = {}) {
       tone,
       status: "DRAFT"
     },
-    include: { lead: true, user: { select: { id: true, name: true, email: true } } }
+    include: { lead: { include: leadInclude }, user: { select: { id: true, name: true, email: true } } }
   });
 
   if (type === "EMAIL") {
@@ -152,37 +227,32 @@ export async function generateDraft(leadId, userId, input = {}) {
     data: { leadId, userId, note: `Generated ${labelType(type)} outreach draft.` }
   });
 
-  return draft;
+  return displayDraft(draft);
 }
 
 export async function listDrafts(query = {}) {
   const leadFilters = {
-    ...(query.industry ? { industry: { contains: query.industry, mode: "insensitive" } } : {}),
+    ...(query.industryId ? { industryId: query.industryId } : {}),
+    ...(query.industry && !query.industryId ? { industry: { contains: query.industry, mode: "insensitive" } } : {}),
     ...(query.serviceId ? { serviceOpportunities: { some: { serviceId: query.serviceId, recommended: true } } } : {})
   };
   const where = {
     ...(query.leadId ? { leadId: query.leadId } : {}),
-    ...(query.type ? { type: query.type } : {}),
+    ...(query.type === "COLD_CALL" ? { subject: { startsWith: coldCallPrefix } } : {}),
+    ...(query.type && query.type !== "COLD_CALL" ? { type: query.type, NOT: { subject: { startsWith: coldCallPrefix } } } : {}),
     ...(query.status ? { status: query.status } : {}),
     ...(Object.keys(leadFilters).length ? { lead: leadFilters } : {})
   };
-  return prisma.outreachDraft.findMany({
+  const drafts = await prisma.outreachDraft.findMany({
     where,
     orderBy: { updatedAt: "desc" },
     take: Math.min(Math.max(Number(query.limit || 80), 1), 150),
     include: {
-      lead: {
-        include: {
-          serviceOpportunities: {
-            where: { recommended: true },
-            include: { service: true },
-            take: 1
-          }
-        }
-      },
+      lead: { include: leadInclude },
       user: { select: { id: true, name: true, email: true } }
     }
   });
+  return drafts.map(displayDraft);
 }
 
 export async function listLeadDrafts(leadId) {
@@ -194,8 +264,8 @@ export async function updateDraft(id, input = {}) {
   const existing = await prisma.outreachDraft.findUnique({ where: { id } });
   if (!existing) throw notFound("Outreach draft not found");
   const data = {
-    ...(input.type && outreachTypes.includes(input.type) ? { type: input.type } : {}),
-    ...(Object.prototype.hasOwnProperty.call(input, "subject") ? { subject: input.subject || null } : {}),
+    ...(input.type && outreachTypes.includes(input.type) ? { type: storageType(input.type) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(input, "subject") || input.type === "COLD_CALL" ? { subject: storageSubject(input.type || existing.type, input.subject) } : {}),
     ...(Object.prototype.hasOwnProperty.call(input, "opener") ? { opener: input.opener || "" } : {}),
     ...(Object.prototype.hasOwnProperty.call(input, "pitch") ? { pitch: input.pitch || "" } : {}),
     ...(Object.prototype.hasOwnProperty.call(input, "cta") ? { cta: input.cta || "" } : {}),
@@ -207,12 +277,12 @@ export async function updateDraft(id, input = {}) {
   const draft = await prisma.outreachDraft.update({
     where: { id },
     data,
-    include: { lead: true, user: { select: { id: true, name: true, email: true } } }
+    include: { lead: { include: leadInclude }, user: { select: { id: true, name: true, email: true } } }
   });
   if (draft.type === "EMAIL" && draft.fullMessage) {
     await prisma.lead.update({ where: { id: draft.leadId }, data: { outreachEmail: draft.fullMessage } });
   }
-  return draft;
+  return displayDraft(draft);
 }
 
 export async function deleteDraft(id) {
@@ -223,7 +293,8 @@ export async function deleteDraft(id) {
 
 export async function getQueue(query = {}) {
   const where = {
-    ...(query.industry ? { industry: { contains: query.industry, mode: "insensitive" } } : {}),
+    ...(query.industryId ? { industryId: query.industryId } : {}),
+    ...(query.industry && !query.industryId ? { industry: { contains: query.industry, mode: "insensitive" } } : {}),
     ...(query.serviceId ? { serviceOpportunities: { some: { serviceId: query.serviceId, recommended: true } } } : {})
   };
   return prisma.lead.findMany({
@@ -231,6 +302,7 @@ export async function getQueue(query = {}) {
     orderBy: [{ priority: "asc" }, { updatedAt: "desc" }],
     take: Math.min(Math.max(Number(query.limit || 50), 1), 100),
     include: {
+      industryRef: true,
       outreachDrafts: { orderBy: { updatedAt: "desc" }, take: 1 },
       serviceOpportunities: {
         where: { recommended: true },

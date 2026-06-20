@@ -1,4 +1,5 @@
 import axios from "axios";
+import { exclusionKeywords, getIndustryProfile, getIndustryProfileConfig } from "./industryProfileService.js";
 import { HttpError } from "../utils/httpError.js";
 import { normalizeWebsiteRoot, websiteDomainKey } from "../utils/priority.js";
 
@@ -8,12 +9,14 @@ function compactLocation({ country, state, city, location }) {
 
 function placeToBusiness(place, input) {
   const location = compactLocation(input);
+  const profile = input.industryProfile || getIndustryProfile(input.industrySlug);
   return {
     company: place.displayName?.text || place.name || "Unnamed business",
     website: normalizeWebsiteRoot(place.websiteUri) || null,
     phone: place.nationalPhoneNumber || place.internationalPhoneNumber || null,
     address: place.formattedAddress || null,
-    industry: input.keyword,
+    industry: input.industryName || profile.name || input.keyword,
+    industrySlug: input.industrySlug,
     location,
     googleRating: place.rating || null,
     googleReviewCount: place.userRatingCount || 0
@@ -22,11 +25,15 @@ function placeToBusiness(place, input) {
 
 function buildQueries(input) {
   const location = compactLocation(input);
+  const profile = input.industryProfile || getIndustryProfile(input.industrySlug);
   const services = String(input.services || "")
     .split(",")
     .map((service) => service.trim())
     .filter(Boolean);
-  const baseKeywords = [input.keyword, ...services].filter(Boolean);
+  const profileTerms = input.keywordsEdited === false || !input.keyword
+    ? profile.keywords
+    : String(input.keyword).split(",").map((keyword) => keyword.trim()).filter(Boolean);
+  const baseKeywords = [...profileTerms, ...services].filter(Boolean);
   const include = String(input.filters?.includeKeywords || "")
     .split(",")
     .map((keyword) => keyword.trim())
@@ -45,6 +52,18 @@ function buildQueries(input) {
   return variants;
 }
 
+function isExcludedBusiness(business, input) {
+  const manual = String(input.filters?.excludeKeywords || "")
+    .split(",")
+    .map((keyword) => keyword.trim().toLowerCase())
+    .filter(Boolean);
+  const preset = exclusionKeywords(input.exclusions || []).map((keyword) => keyword.toLowerCase());
+  const blocked = [...new Set([...manual, ...preset])];
+  if (!blocked.length) return false;
+  const haystack = `${business.company} ${business.website || ""} ${business.address || ""}`.toLowerCase();
+  return blocked.some((keyword) => haystack.includes(keyword));
+}
+
 export async function searchGooglePlaces(input) {
   if (!process.env.GOOGLE_API_KEY) {
     throw new HttpError(400, "GOOGLE_API_KEY is required to run scanner searches");
@@ -55,8 +74,9 @@ export async function searchGooglePlaces(input) {
   const hasWebsiteOnly = Boolean(input.hasWebsiteOnly);
   const seen = new Set();
   const businesses = [];
+  const enrichedInput = { ...input, industryProfile: await getIndustryProfileConfig(input.industrySlug) };
 
-  for (const textQuery of buildQueries(input)) {
+  for (const textQuery of buildQueries(enrichedInput)) {
     if (businesses.length >= target) break;
 
     const { data } = await axios.post(
@@ -77,9 +97,10 @@ export async function searchGooglePlaces(input) {
     );
 
     for (const place of data.places || []) {
-      const business = placeToBusiness(place, input);
+      const business = placeToBusiness(place, enrichedInput);
       if (hasWebsiteOnly && !business.website) continue;
       if (business.googleReviewCount < minReviews) continue;
+      if (isExcludedBusiness(business, enrichedInput)) continue;
 
       const key = websiteDomainKey(business.website) || `${business.company}-${business.address}`.toLowerCase();
       if (seen.has(key)) continue;

@@ -12,6 +12,10 @@ export async function sendOne(req, res) {
   res.status(201).json(await emailsService.sendOne(req.user.id, req.body));
 }
 
+export async function sendTest(req, res) {
+  res.status(201).json(await emailsService.sendTest(req.user.id, req.body));
+}
+
 export async function sendBulkApproved(req, res) {
   res.status(201).json(await emailsService.sendBulkApproved(req.user.id, req.body));
 }

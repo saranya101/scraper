@@ -7,9 +7,24 @@ const emptyLead = {
   company: "",
   website: "",
   phone: "",
+  generalEmail: "",
+  ownerEmail: "",
+  linkedinCompany: "",
+  instagram: "",
+  facebook: "",
+  whatsapp: "",
+  contactConfidence: "",
+  contactSource: "",
   address: "",
   industry: "",
   location: "",
+  cms: "",
+  analyticsGa4: false,
+  analyticsGtm: false,
+  analyticsMetaPixel: false,
+  bookingCalendly: false,
+  bookingSimplyBook: false,
+  bookingAcuity: false,
   screenshotPath: "",
   mobileScreenshotPath: "",
   score: 7,
@@ -27,9 +42,60 @@ const emptyLead = {
   recommendedFixes: ""
 };
 
+function fixesToText(fixes) {
+  if (!Array.isArray(fixes)) return "";
+  return fixes.map((fix) => (typeof fix === "string" ? fix : fix.title || fix.details || "")).filter(Boolean).join("\n");
+}
+
+function cleanLeadPayload(form) {
+  return {
+    company: form.company,
+    website: form.website,
+    phone: form.phone || null,
+    generalEmail: form.generalEmail || null,
+    ownerEmail: form.ownerEmail || null,
+    linkedinCompany: form.linkedinCompany || null,
+    instagram: form.instagram || null,
+    facebook: form.facebook || null,
+    whatsapp: form.whatsapp || null,
+    contactConfidence: form.contactConfidence === "" ? null : Number(form.contactConfidence),
+    contactSource: form.contactSource || null,
+    address: form.address || null,
+    industry: form.industry || null,
+    location: form.location || null,
+    cms: form.cms || null,
+    analyticsGa4: Boolean(form.analyticsGa4),
+    analyticsGtm: Boolean(form.analyticsGtm),
+    analyticsMetaPixel: Boolean(form.analyticsMetaPixel),
+    bookingCalendly: Boolean(form.bookingCalendly),
+    bookingSimplyBook: Boolean(form.bookingSimplyBook),
+    bookingAcuity: Boolean(form.bookingAcuity),
+    screenshotPath: form.screenshotPath || null,
+    mobileScreenshotPath: form.mobileScreenshotPath || null,
+    score: Number(form.score),
+    opportunityScore: form.opportunityScore === "" ? null : Number(form.opportunityScore),
+    visualDesignScore: form.visualDesignScore === "" ? null : Number(form.visualDesignScore),
+    mobileScore: form.mobileScore === "" ? null : Number(form.mobileScore),
+    trustScore: form.trustScore === "" ? null : Number(form.trustScore),
+    ctaScore: form.ctaScore === "" ? null : Number(form.ctaScore),
+    seoScore: form.seoScore === "" ? null : Number(form.seoScore),
+    estimatedProjectValue: form.estimatedProjectValue || null,
+    websiteStatus: form.websiteStatus || "UNKNOWN",
+    status: form.status || "NOT_CONTACTED",
+    outreachEmail: form.outreachEmail || null,
+    issues: String(form.issues || "").split("\n").map((item) => item.trim()).filter(Boolean),
+    recommendedFixes: String(form.recommendedFixes || "").split("\n").map((item) => item.trim()).filter(Boolean)
+  };
+}
+
+function Required() {
+  return <span className="ml-1 text-rose-500" aria-label="required">*</span>;
+}
+
 export default function LeadFormModal({ lead, defaultValues = {}, onClose, onSave }) {
   const [form, setForm] = useState(emptyLead);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     if (lead) {
@@ -37,7 +103,7 @@ export default function LeadFormModal({ lead, defaultValues = {}, onClose, onSav
         ...emptyLead,
         ...lead,
         issues: lead.issues?.map((issue) => issue.issueText || issue).join("\n") || "",
-        recommendedFixes: Array.isArray(lead.recommendedFixes) ? lead.recommendedFixes.join("\n") : ""
+        recommendedFixes: fixesToText(lead.recommendedFixes)
       });
     } else {
       setForm({ ...emptyLead, ...defaultValues });
@@ -47,20 +113,12 @@ export default function LeadFormModal({ lead, defaultValues = {}, onClose, onSav
   async function submit(event) {
     event.preventDefault();
     setSaving(true);
+    setError("");
     try {
-      await onSave({
-        ...form,
-        score: Number(form.score),
-        opportunityScore: form.opportunityScore === "" ? null : Number(form.opportunityScore),
-        visualDesignScore: form.visualDesignScore === "" ? null : Number(form.visualDesignScore),
-        mobileScore: form.mobileScore === "" ? null : Number(form.mobileScore),
-        trustScore: form.trustScore === "" ? null : Number(form.trustScore),
-        ctaScore: form.ctaScore === "" ? null : Number(form.ctaScore),
-        seoScore: form.seoScore === "" ? null : Number(form.seoScore),
-        issues: form.issues.split("\n").map((item) => item.trim()).filter(Boolean),
-        recommendedFixes: form.recommendedFixes.split("\n").map((item) => item.trim()).filter(Boolean)
-      });
+      await onSave(cleanLeadPayload(form));
       onClose();
+    } catch (saveError) {
+      setError(saveError.response?.data?.message || saveError.message || "Could not save lead");
     } finally {
       setSaving(false);
     }
@@ -73,6 +131,7 @@ export default function LeadFormModal({ lead, defaultValues = {}, onClose, onSav
           <div>
             <h2 className="text-xl font-semibold tracking-tight">{lead ? "Edit lead" : "Create lead"}</h2>
             <p className="text-sm text-slate-500">Keep the audit record crisp and ready for outreach.</p>
+            <p className="mt-1 text-xs text-slate-400"><span className="text-rose-500">*</span> Required fields</p>
           </div>
           <button type="button" onClick={onClose} className="rounded-lg p-2 hover:bg-slate-100" aria-label="Close modal">
             <X size={18} />
@@ -80,16 +139,24 @@ export default function LeadFormModal({ lead, defaultValues = {}, onClose, onSav
         </div>
         <div className="grid gap-4 md:grid-cols-2">
           <label>
-            <span className="mb-1.5 block text-sm font-medium">Company</span>
+            <span className="mb-1.5 block text-sm font-medium">Company<Required /></span>
             <Input value={form.company} onChange={(event) => setForm({ ...form, company: event.target.value })} required />
           </label>
           <label>
-            <span className="mb-1.5 block text-sm font-medium">Website</span>
+            <span className="mb-1.5 block text-sm font-medium">Website<Required /></span>
             <Input value={form.website} onChange={(event) => setForm({ ...form, website: event.target.value })} required />
           </label>
           <label>
             <span className="mb-1.5 block text-sm font-medium">Phone</span>
             <Input value={form.phone || ""} onChange={(event) => setForm({ ...form, phone: event.target.value })} />
+          </label>
+          <label>
+            <span className="mb-1.5 block text-sm font-medium">General email</span>
+            <Input type="email" value={form.generalEmail || ""} onChange={(event) => setForm({ ...form, generalEmail: event.target.value })} placeholder="hello@company.com" />
+          </label>
+          <label>
+            <span className="mb-1.5 block text-sm font-medium">Owner email</span>
+            <Input type="email" value={form.ownerEmail || ""} onChange={(event) => setForm({ ...form, ownerEmail: event.target.value })} placeholder="founder@company.com" />
           </label>
           <label>
             <span className="mb-1.5 block text-sm font-medium">Industry</span>
@@ -104,7 +171,31 @@ export default function LeadFormModal({ lead, defaultValues = {}, onClose, onSav
             <Input value={form.location || ""} onChange={(event) => setForm({ ...form, location: event.target.value })} />
           </label>
           <label>
-            <span className="mb-1.5 block text-sm font-medium">Score</span>
+            <span className="mb-1.5 block text-sm font-medium">WhatsApp</span>
+            <Input value={form.whatsapp || ""} onChange={(event) => setForm({ ...form, whatsapp: event.target.value })} />
+          </label>
+          <label>
+            <span className="mb-1.5 block text-sm font-medium">LinkedIn company</span>
+            <Input value={form.linkedinCompany || ""} onChange={(event) => setForm({ ...form, linkedinCompany: event.target.value })} placeholder="https://linkedin.com/company/..." />
+          </label>
+          <label>
+            <span className="mb-1.5 block text-sm font-medium">Instagram</span>
+            <Input value={form.instagram || ""} onChange={(event) => setForm({ ...form, instagram: event.target.value })} placeholder="https://instagram.com/..." />
+          </label>
+          <label>
+            <span className="mb-1.5 block text-sm font-medium">Facebook</span>
+            <Input value={form.facebook || ""} onChange={(event) => setForm({ ...form, facebook: event.target.value })} placeholder="https://facebook.com/..." />
+          </label>
+          <label>
+            <span className="mb-1.5 block text-sm font-medium">Contact confidence</span>
+            <Input type="number" min="0" max="100" value={form.contactConfidence || ""} onChange={(event) => setForm({ ...form, contactConfidence: event.target.value })} placeholder="0-100" />
+          </label>
+          <label>
+            <span className="mb-1.5 block text-sm font-medium">Contact source</span>
+            <Input value={form.contactSource || ""} onChange={(event) => setForm({ ...form, contactSource: event.target.value })} placeholder="Homepage, contact page, manual research..." />
+          </label>
+          <label>
+            <span className="mb-1.5 block text-sm font-medium">Score<Required /></span>
             <Input type="number" min="1" max="10" value={form.score} onChange={(event) => setForm({ ...form, score: event.target.value })} />
           </label>
           {[
@@ -149,6 +240,36 @@ export default function LeadFormModal({ lead, defaultValues = {}, onClose, onSav
               <option value="BOT_PROTECTION">Bot Protection</option>
             </Select>
           </label>
+          <label>
+            <span className="mb-1.5 block text-sm font-medium">CMS / builder</span>
+            <Select value={form.cms || ""} onChange={(event) => setForm({ ...form, cms: event.target.value })}>
+              <option value="">Unknown</option>
+              <option value="wordpress">WordPress</option>
+              <option value="shopify">Shopify</option>
+              <option value="wix">Wix</option>
+              <option value="webflow">Webflow</option>
+              <option value="squarespace">Squarespace</option>
+              <option value="custom">Custom</option>
+            </Select>
+          </label>
+          <div className="md:col-span-2">
+            <p className="mb-2 text-sm font-medium">Detected tech / missing opportunities</p>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {[
+                ["GA4", "analyticsGa4"],
+                ["Google Tag Manager", "analyticsGtm"],
+                ["Meta Pixel", "analyticsMetaPixel"],
+                ["Calendly", "bookingCalendly"],
+                ["SimplyBook", "bookingSimplyBook"],
+                ["Acuity", "bookingAcuity"]
+              ].map(([label, key]) => (
+                <label key={key} className="flex items-center gap-2 rounded-xl border border-slate-200 p-3 text-sm font-medium">
+                  <input type="checkbox" checked={Boolean(form[key])} onChange={(event) => setForm({ ...form, [key]: event.target.checked })} />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </div>
           <label className="md:col-span-2">
             <span className="mb-1.5 block text-sm font-medium">Screenshot path</span>
             <Input value={form.screenshotPath || ""} onChange={(event) => setForm({ ...form, screenshotPath: event.target.value })} placeholder="/screenshots/company.png" />
@@ -175,6 +296,7 @@ export default function LeadFormModal({ lead, defaultValues = {}, onClose, onSav
           </label>
         </div>
         <div className="mt-6 flex justify-end gap-3">
+          {error && <p className="mr-auto rounded-xl bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">{error}</p>}
           <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
           <Button disabled={saving}>{saving ? "Saving..." : "Save lead"}</Button>
         </div>

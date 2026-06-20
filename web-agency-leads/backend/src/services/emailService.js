@@ -303,6 +303,13 @@ export async function sendEmail(userId, input = {}) {
 
   try {
     await providerSend({ account, token: await accessToken(account), toEmail, subject, body });
+    if (input.testOnly) {
+      return prisma.emailSend.update({
+        where: { id: sendRecord.id },
+        data: { status: "SENT", mode: input.mode || "MANUAL_APPROVAL", sentAt: new Date() },
+        include: { emailAccount: { select: { id: true, provider: true, email: true } } }
+      });
+    }
     const sent = await prisma.$transaction(async (tx) => {
       const updatedSend = await tx.emailSend.update({
         where: { id: sendRecord.id },

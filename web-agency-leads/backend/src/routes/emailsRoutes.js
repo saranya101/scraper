@@ -21,9 +21,14 @@ const sendOneBody = z.object({
   body: z.string().min(1)
 });
 
+const sendTestBody = sendOneBody.extend({
+  testEmail: z.string().email()
+}).omit({ toEmail: true });
+
 router.get("/leads", asyncHandler(emailsController.leads));
 router.post("/generate", validate({ parse: (value) => z.object({ body: leadIdsBody }).parse(value) }), asyncHandler(emailsController.generate));
 router.post("/send-one", validate({ parse: (value) => z.object({ body: sendOneBody }).parse(value) }), asyncHandler(emailsController.sendOne));
+router.post("/send-test", validate({ parse: (value) => z.object({ body: sendTestBody }).parse(value) }), asyncHandler(emailsController.sendTest));
 router.post("/send-bulk-approved", asyncHandler(emailsController.sendBulkApproved));
 router.post("/auto-send", validate({ parse: (value) => z.object({ body: z.object({ leadIds: z.array(z.string()).min(1), emailAccountId: z.string().optional().nullable() }) }).parse(value) }), asyncHandler(emailsController.autoSend));
 router.get("/bulk-job/:id", asyncHandler(emailsController.bulkJob));

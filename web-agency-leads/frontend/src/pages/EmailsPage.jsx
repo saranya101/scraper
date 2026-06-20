@@ -9,13 +9,15 @@ import { api } from "../services/api.js";
 import { domain, formatDate, priorities } from "../utils/format.js";
 
 const initialFilters = {
+  search: "",
+  qualified: "false",
   minScore: "",
-  maxScore: "6",
+  maxScore: "",
   industryId: "",
   recommendedServiceId: "",
   priority: "",
-  hasEmailOnly: "true",
-  contactState: "not_contacted",
+  hasEmailOnly: "",
+  contactState: "",
   missingBooking: "",
   missingAnalytics: "",
   withoutMetaPixel: ""
@@ -40,6 +42,7 @@ export default function EmailsPage() {
   const [approvalQueue, setApprovalQueue] = useState([]);
   const [approvalIndex, setApprovalIndex] = useState(0);
   const [preview, setPreview] = useState(null);
+  const [testEmail, setTestEmail] = useState("");
   const [autoConfirm, setAutoConfirm] = useState(false);
   const [bulkJob, setBulkJob] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -173,6 +176,29 @@ export default function EmailsPage() {
     }
   }
 
+  async function sendTestEmail() {
+    if (!preview?.lead) return;
+    if (!testEmail) return push("Add a test email first", "error");
+    if (!accounts.length) return push("Connect Gmail or Outlook first", "error");
+    setProcessing(true);
+    try {
+      const { data } = await api.post("/emails/send-test", {
+        leadId: preview.lead.id,
+        outreachDraftId: preview.draftId,
+        emailAccountId: accounts[0]?.id,
+        testEmail,
+        subject: preview.subject,
+        body: preview.body
+      });
+      if (data.status === "SENT") push(`Test email sent to ${testEmail}`);
+      else push(data.errorMessage || "Test email failed", "error");
+    } catch (error) {
+      push(error.response?.data?.message || "Test email failed", "error");
+    } finally {
+      setProcessing(false);
+    }
+  }
+
   async function saveDraft() {
     if (!preview?.draftId) return;
     await api.put(`/outreach/${preview.draftId}`, { subject: preview.subject, fullMessage: preview.body, status: "SAVED" });
@@ -216,7 +242,7 @@ export default function EmailsPage() {
         <div>
           <p className="text-sm font-semibold uppercase tracking-[0.22em] text-slate-400">Qualified outreach</p>
           <h1 className="mt-2 text-3xl font-semibold tracking-tight md:text-4xl">Emails</h1>
-          <p className="mt-2 max-w-2xl text-slate-500">Generate, approve, and send personalized emails to qualified leads.</p>
+        <p className="mt-2 max-w-2xl text-slate-500">Search leads, generate emails, send a test to yourself, then approve or auto-send.</p>
         </div>
         <Link to="/settings/email" className="inline-flex items-center justify-center rounded-lg bg-white px-3.5 py-2 text-sm font-semibold text-slate-900 ring-1 ring-slate-200 hover:bg-slate-50">
           {accounts.length ? `${accounts.length} sender connected` : "Connect email"}
@@ -225,6 +251,11 @@ export default function EmailsPage() {
 
       <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="grid gap-3 md:grid-cols-4 xl:grid-cols-6">
+          <Input className="md:col-span-2" placeholder="Search company, website, email..." value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} />
+          <Select value={filters.qualified} onChange={(e) => setFilters({ ...filters, qualified: e.target.value })}>
+            <option value="false">All leads</option>
+            <option value="true">Qualified only</option>
+          </Select>
           <Input placeholder="Min score" value={filters.minScore} onChange={(e) => setFilters({ ...filters, minScore: e.target.value })} />
           <Input placeholder="Max score" value={filters.maxScore} onChange={(e) => setFilters({ ...filters, maxScore: e.target.value })} />
           <Select value={filters.industryId} onChange={(e) => setFilters({ ...filters, industryId: e.target.value })}>
@@ -247,8 +278,8 @@ export default function EmailsPage() {
             <option value="contacted">Already contacted</option>
           </Select>
           <Select value={filters.hasEmailOnly} onChange={(e) => setFilters({ ...filters, hasEmailOnly: e.target.value })}>
-            <option value="true">Has email only</option>
             <option value="">With or without email</option>
+            <option value="true">Has email only</option>
           </Select>
           <Select value={filters.missingBooking} onChange={(e) => setFilters({ ...filters, missingBooking: e.target.value })}>
             <option value="">Any booking state</option>
@@ -340,6 +371,13 @@ export default function EmailsPage() {
               <label><span className="mb-1.5 block text-sm font-medium">Recipient email</span><Input value={preview.toEmail} onChange={(e) => setPreview({ ...preview, toEmail: e.target.value })} /></label>
               <label><span className="mb-1.5 block text-sm font-medium">Subject</span><Input value={preview.subject} onChange={(e) => setPreview({ ...preview, subject: e.target.value })} /></label>
               <label><span className="mb-1.5 block text-sm font-medium">Email body</span><Textarea className="min-h-72" value={preview.body} onChange={(e) => setPreview({ ...preview, body: e.target.value })} /></label>
+              <label>
+                <span className="mb-1.5 block text-sm font-medium">Test email before sending to lead</span>
+                <div className="flex gap-2">
+                  <Input value={testEmail} onChange={(e) => setTestEmail(e.target.value)} placeholder="you@youragency.com" />
+                  <Button type="button" variant="secondary" onClick={sendTestEmail} disabled={processing || !accounts.length}>Send test</Button>
+                </div>
+              </label>
             </div>
             <div className="mt-5 flex flex-wrap justify-between gap-3">
               <Button variant="secondary" onClick={saveDraft}>Save draft</Button>

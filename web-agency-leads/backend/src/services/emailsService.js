@@ -31,8 +31,21 @@ function leadRow(lead) {
 
 function whereFromQuery(query = {}) {
   const and = [{ status: { not: "ARCHIVED" } }];
+  const search = String(query.search || "").trim();
   if (query.qualified !== "false") {
     and.push({ OR: [{ priority: { in: ["HOT", "WARM"] } }, { score: { lte: 6 } }, { opportunityScore: { gte: 7 } }] });
+  }
+  if (search) {
+    and.push({
+      OR: [
+        { company: { contains: search, mode: "insensitive" } },
+        { website: { contains: search, mode: "insensitive" } },
+        { industry: { contains: search, mode: "insensitive" } },
+        { industryRef: { name: { contains: search, mode: "insensitive" } } },
+        { generalEmail: { contains: search, mode: "insensitive" } },
+        { ownerEmail: { contains: search, mode: "insensitive" } }
+      ]
+    });
   }
   if (query.minScore) and.push({ score: { gte: Number(query.minScore) } });
   if (query.maxScore) and.push({ score: { lte: Number(query.maxScore) } });
@@ -93,6 +106,18 @@ export async function sendOne(userId, input = {}) {
     ...input,
     body: bodyWithFooter(input.body),
     mode: input.mode || "MANUAL_APPROVAL"
+  });
+}
+
+export async function sendTest(userId, input = {}) {
+  if (!input.testEmail) throw new HttpError(422, "Add a test email address first");
+  return emailService.sendEmail(userId, {
+    ...input,
+    toEmail: input.testEmail,
+    body: bodyWithFooter(input.body),
+    mode: "MANUAL_APPROVAL",
+    testOnly: true,
+    ignoreCooldown: true
   });
 }
 

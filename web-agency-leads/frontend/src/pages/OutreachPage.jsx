@@ -70,7 +70,6 @@ export default function OutreachPage() {
   const [emailAccounts, setEmailAccounts] = useState([]);
   const [selectedLead, setSelectedLead] = useState(null);
   const [selectedDraft, setSelectedDraft] = useState(null);
-  const [emailAccountId, setEmailAccountId] = useState("");
   const [recipientEmail, setRecipientEmail] = useState("");
   const [confirmSend, setConfirmSend] = useState(false);
   const [form, setForm] = useState(emptyDraft);
@@ -83,6 +82,8 @@ export default function OutreachPage() {
   const params = useMemo(() => Object.fromEntries(Object.entries(filters).filter(([, value]) => value)), [filters]);
   const messagePreview = previewMessage(form);
   const emailBody = emailRecipientBody(form);
+  const gmailSender = emailAccounts.find((account) => account.provider === "GOOGLE");
+  const gmailReady = Boolean(gmailSender?.configured && gmailSender?.active);
 
   async function loadData() {
     const [queueRes, draftsRes] = await Promise.all([
@@ -105,10 +106,7 @@ export default function OutreachPage() {
 
   useEffect(() => {
     api.get("/leads/meta/catalog").then(({ data }) => setCatalog(data)).catch(() => {});
-    api.get("/email/accounts").then(({ data }) => {
-      setEmailAccounts(data);
-      if (data[0]) setEmailAccountId(data[0].id);
-    }).catch(() => {});
+    api.get("/email/accounts").then(({ data }) => setEmailAccounts(data)).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -161,7 +159,7 @@ export default function OutreachPage() {
 
   async function sendEmail() {
     if (!selectedLead) return push("Select a lead first", "error");
-    if (!emailAccounts.length) return push("Connect Gmail or Outlook before sending", "error");
+    if (!gmailReady) return push("Connect ociastudios@gmail.com before sending", "error");
     if (!recipientEmail) return push("Add a recipient email first", "error");
     if (!form.subject) return push("Add an email subject first", "error");
     if (!emailBody) return push("Add an email body first", "error");
@@ -170,7 +168,6 @@ export default function OutreachPage() {
       const { data } = await api.post("/email/send", {
         leadId: selectedLead.id,
         outreachDraftId: selectedDraft?.id || null,
-        emailAccountId,
         toEmail: recipientEmail,
         subject: form.subject,
         body: emailBody
@@ -327,12 +324,7 @@ export default function OutreachPage() {
                 <div className="space-y-2 text-sm">
                   <div className="rounded-xl bg-white/10 p-3">
                     <p className="font-semibold">Email connector</p>
-                    <p className="mt-1 text-slate-400">{emailAccounts.length ? `${emailAccounts.length} account connected` : "Connect Gmail or Outlook in Email Settings before sending."}</p>
-                    {emailAccounts.length > 0 && (
-                      <Select value={emailAccountId} onChange={(event) => setEmailAccountId(event.target.value)} className="mt-3 bg-slate-900 text-white">
-                        {emailAccounts.map((account) => <option key={account.id} value={account.id}>{account.email}</option>)}
-                      </Select>
-                    )}
+                    <p className="mt-1 text-slate-400">{gmailReady ? `Gmail connected: ${gmailSender.email}` : "Connect ociastudios@gmail.com in Email Settings."}</p>
                   </div>
                   <div className="rounded-xl bg-white/10 p-3">
                     <p className="font-semibold">LinkedIn connector</p>
@@ -456,9 +448,9 @@ export default function OutreachPage() {
         <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/50 p-4 backdrop-blur-sm">
           <div className="w-full max-w-xl rounded-3xl bg-white p-6 shadow-glow">
             <h2 className="text-xl font-semibold">Send this email?</h2>
-            <p className="mt-2 text-sm text-slate-500">This will send from the connected account, log the send, and move the lead to Sent.</p>
+            <p className="mt-2 text-sm text-slate-500">This will send from the connected Gmail account, log the send, and move the lead to Sent.</p>
             <div className="mt-5 space-y-3 rounded-2xl bg-slate-50 p-4 text-sm">
-              <p><span className="font-semibold">From:</span> {emailAccounts.find((account) => account.id === emailAccountId)?.email || "No account selected"}</p>
+              <p><span className="font-semibold">From:</span> {gmailSender?.email || "Gmail not connected"}</p>
               <p><span className="font-semibold">To:</span> {recipientEmail || "No recipient"}</p>
               <p><span className="font-semibold">Subject:</span> {form.subject || "No subject"}</p>
             </div>

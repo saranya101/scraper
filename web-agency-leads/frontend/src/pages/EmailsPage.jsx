@@ -1,6 +1,6 @@
-import { AlertTriangle, CheckCircle2, MailPlus, RefreshCw, Send, X } from "lucide-react";
+import { CheckCircle2, MailPlus, RefreshCw, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Badge } from "../components/ui/Badge.jsx";
 import { Button } from "../components/ui/Button.jsx";
 import { Input, Select, Textarea } from "../components/ui/Input.jsx";
@@ -33,6 +33,7 @@ function messageWithoutSubject(message) {
 
 export default function EmailsPage() {
   const { push } = useToast();
+  const [searchParams] = useSearchParams();
   const [catalog, setCatalog] = useState({ industries: [], services: [] });
   const [accounts, setAccounts] = useState([]);
   const [leads, setLeads] = useState([]);
@@ -43,13 +44,13 @@ export default function EmailsPage() {
   const [approvalIndex, setApprovalIndex] = useState(0);
   const [preview, setPreview] = useState(null);
   const [testEmail, setTestEmail] = useState("");
-  const [autoConfirm, setAutoConfirm] = useState(false);
-  const [bulkJob, setBulkJob] = useState(null);
   const [loading, setLoading] = useState(false);
   const [processing, setProcessing] = useState(false);
 
   const selectedLeads = useMemo(() => leads.filter((lead) => selected.includes(lead.id)), [leads, selected]);
   const currentLead = approvalQueue[approvalIndex];
+  const gmailSender = accounts.find((account) => account.provider === "GOOGLE");
+  const gmailReady = Boolean(gmailSender?.configured && gmailSender?.active);
 
   async function loadLeads() {
     setLoading(true);
@@ -71,22 +72,25 @@ export default function EmailsPage() {
   }, []);
 
   useEffect(() => {
+    const leadId = searchParams.get("leadId");
+    if (!leadId) return;
+    api.get(`/leads/${leadId}`).then(({ data }) => {
+      const lead = {
+        ...data,
+        contactEmail: data.ownerEmail || data.generalEmail || "",
+        recommendedService: data.serviceOpportunities?.find((item) => item.recommended)?.service || data.serviceOpportunities?.[0]?.service || null
+      };
+      setSelected([lead.id]);
+      setApprovalQueue([lead]);
+      setApprovalIndex(0);
+      loadPreview(lead);
+    }).catch((error) => push(error.response?.data?.message || "Could not open lead email preview", "error"));
+  }, []);
+
+  useEffect(() => {
     const timer = setTimeout(loadLeads, 200);
     return () => clearTimeout(timer);
   }, [JSON.stringify(filters)]);
-
-  useEffect(() => {
-    if (!bulkJob || !["PENDING", "RUNNING"].includes(bulkJob.status)) return;
-    const timer = setInterval(async () => {
-      const { data } = await api.get(`/emails/bulk-job/${bulkJob.id}`);
-      setBulkJob(data);
-      if (!["PENDING", "RUNNING"].includes(data.status)) {
-        clearInterval(timer);
-        await loadLeads();
-      }
-    }, 1500);
-    return () => clearInterval(timer);
-  }, [bulkJob?.id, bulkJob?.status]);
 
   function toggleLead(id) {
     setSelected((items) => items.includes(id) ? items.filter((item) => item !== id) : [...items, id]);
@@ -113,7 +117,7 @@ export default function EmailsPage() {
 
   async function startApproval() {
     if (!selected.length) return push("Select leads first", "error");
-    if (!accounts.length) return push("Connect Gmail or Outlook first", "error");
+    if (!gmailReady) return push("Connect ociastudios@gmail.com before sending", "error");
     const queue = selectedLeads.length ? selectedLeads : leads.filter((lead) => selected.includes(lead.id));
     setApprovalQueue(queue);
     setApprovalIndex(0);
@@ -138,7 +142,7 @@ export default function EmailsPage() {
         toEmail: lead.contactEmail || "",
         subject: draft?.subject || `Quick idea for ${lead.company}`,
         body: messageWithoutSubject(draft?.fullMessage || ""),
-        issue: lead.issues?.[0]?.issueText || "No issue saved",
+        issue: draft?.opener || "No reliable evidence-backed observation available.",
         service: lead.recommendedService?.name || "Website redesign"
       });
     } catch (error) {
@@ -161,7 +165,6 @@ export default function EmailsPage() {
       const { data } = await api.post("/emails/send-one", {
         leadId: preview.lead.id,
         outreachDraftId: preview.draftId,
-        emailAccountId: accounts[0]?.id,
         toEmail: preview.toEmail,
         subject: preview.subject,
         body: preview.body
@@ -179,13 +182,12 @@ export default function EmailsPage() {
   async function sendTestEmail() {
     if (!preview?.lead) return;
     if (!testEmail) return push("Add a test email first", "error");
-    if (!accounts.length) return push("Connect Gmail or Outlook first", "error");
+    if (!gmailReady) return push("Connect ociastudios@gmail.com before sending", "error");
     setProcessing(true);
     try {
       const { data } = await api.post("/emails/send-test", {
         leadId: preview.lead.id,
         outreachDraftId: preview.draftId,
-        emailAccountId: accounts[0]?.id,
         testEmail,
         subject: preview.subject,
         body: preview.body
@@ -213,39 +215,16 @@ export default function EmailsPage() {
     await loadLeads();
   }
 
-  async function startAutoSend() {
-    if (!selected.length) return push("Select leads first", "error");
-    if (!accounts.length) return push("Connect Gmail or Outlook first", "error");
-    setProcessing(true);
-    try {
-      const { data } = await api.post("/emails/auto-send", { leadIds: selected, emailAccountId: accounts[0].id });
-      setBulkJob(data);
-      setAutoConfirm(false);
-      push("Auto-send started");
-    } catch (error) {
-      push(error.response?.data?.message || "Auto-send failed", "error");
-    } finally {
-      setProcessing(false);
-    }
-  }
-
-  async function cancelBulkJob() {
-    if (!bulkJob) return;
-    const { data } = await api.post(`/emails/bulk-job/${bulkJob.id}/cancel`);
-    setBulkJob(data);
-    push("Bulk job cancelled");
-  }
-
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
           <p className="text-sm font-semibold uppercase tracking-[0.22em] text-slate-400">Qualified outreach</p>
           <h1 className="mt-2 text-3xl font-semibold tracking-tight md:text-4xl">Emails</h1>
-        <p className="mt-2 max-w-2xl text-slate-500">Search leads, generate emails, send a test to yourself, then approve or auto-send.</p>
+        <p className="mt-2 max-w-2xl text-slate-500">Search leads, generate emails, preview and edit each message, then send manually.</p>
         </div>
         <Link to="/settings/email" className="inline-flex items-center justify-center rounded-lg bg-white px-3.5 py-2 text-sm font-semibold text-slate-900 ring-1 ring-slate-200 hover:bg-slate-50">
-          {accounts.length ? `${accounts.length} sender connected` : "Connect email"}
+          {gmailReady ? `Sending from ${gmailSender.email}` : "Connect Gmail"}
         </Link>
       </div>
 
@@ -302,7 +281,6 @@ export default function EmailsPage() {
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" onClick={generateSelected} disabled={processing}><MailPlus size={16} /> Generate emails</Button>
             <Button variant="secondary" onClick={startApproval} disabled={processing}><CheckCircle2 size={16} /> Generate + send with approval</Button>
-            <Button onClick={() => setAutoConfirm(true)} disabled={processing}><Send size={16} /> Auto-send selected</Button>
             <Button variant="ghost" className="text-white hover:bg-white/10 hover:text-white" onClick={markContacted}>Mark as contacted</Button>
           </div>
         </div>
@@ -359,7 +337,7 @@ export default function EmailsPage() {
             </div>
             <div className="mb-4 grid gap-3 md:grid-cols-2">
               <div className="rounded-2xl bg-slate-50 p-4">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Detected issue</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Evidence-backed context</p>
                 <p className="mt-1 text-sm">{preview.issue}</p>
               </div>
               <div className="rounded-2xl bg-slate-50 p-4">
@@ -375,7 +353,7 @@ export default function EmailsPage() {
                 <span className="mb-1.5 block text-sm font-medium">Test email before sending to lead</span>
                 <div className="flex gap-2">
                   <Input value={testEmail} onChange={(e) => setTestEmail(e.target.value)} placeholder="you@youragency.com" />
-                  <Button type="button" variant="secondary" onClick={sendTestEmail} disabled={processing || !accounts.length}>Send test</Button>
+                  <Button type="button" variant="secondary" onClick={sendTestEmail} disabled={processing || !gmailReady}>Send test</Button>
                 </div>
               </label>
             </div>
@@ -384,54 +362,13 @@ export default function EmailsPage() {
               <div className="flex flex-wrap gap-3">
                 <Button variant="secondary" onClick={nextPreview}>Skip</Button>
                 <Button variant="secondary" onClick={nextPreview}>Next</Button>
-                <Button onClick={sendPreview} disabled={processing || !accounts.length}>{processing ? "Sending..." : "Send"}</Button>
+                <Button onClick={sendPreview} disabled={processing || !gmailReady}>{processing ? "Sending..." : "Send"}</Button>
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {autoConfirm && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/50 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-glow">
-            <div className="mb-4 flex gap-3">
-              <div className="grid h-11 w-11 place-items-center rounded-2xl bg-amber-50 text-amber-700"><AlertTriangle size={20} /></div>
-              <div>
-                <h2 className="text-xl font-semibold">Auto-send selected?</h2>
-                <p className="mt-1 text-sm text-slate-500">This will automatically generate and send emails to {selected.length} leads without preview.</p>
-              </div>
-            </div>
-            <div className="flex justify-end gap-3">
-              <Button variant="secondary" onClick={() => setAutoConfirm(false)}>Cancel</Button>
-              <Button onClick={startAutoSend} disabled={processing}>Confirm auto-send</Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {bulkJob && (
-        <div className="fixed bottom-5 right-5 z-40 w-[min(440px,calc(100vw-2rem))] rounded-3xl border border-slate-200 bg-white p-5 shadow-glow">
-          <div className="mb-4 flex items-start justify-between gap-3">
-            <div>
-              <h2 className="font-semibold">Bulk email progress</h2>
-              <p className="text-sm text-slate-500">{bulkJob.status}</p>
-            </div>
-            {["PENDING", "RUNNING"].includes(bulkJob.status) && <Button variant="secondary" onClick={cancelBulkJob}>Cancel</Button>}
-          </div>
-          <div className="mb-3 h-2 overflow-hidden rounded-full bg-slate-100">
-            <div className="h-full rounded-full bg-slate-950" style={{ width: `${Math.min(100, Math.round(((bulkJob.sentCount + bulkJob.failedCount + bulkJob.skippedCount) / Math.max(bulkJob.totalLeads, 1)) * 100))}%` }} />
-          </div>
-          <div className="grid grid-cols-4 gap-2 text-center text-sm">
-            <div className="rounded-xl bg-slate-50 p-2"><p className="font-semibold">{bulkJob.totalLeads}</p><p className="text-xs text-slate-400">Total</p></div>
-            <div className="rounded-xl bg-emerald-50 p-2"><p className="font-semibold">{bulkJob.sentCount}</p><p className="text-xs text-slate-400">Sent</p></div>
-            <div className="rounded-xl bg-rose-50 p-2"><p className="font-semibold">{bulkJob.failedCount}</p><p className="text-xs text-slate-400">Failed</p></div>
-            <div className="rounded-xl bg-amber-50 p-2"><p className="font-semibold">{bulkJob.skippedCount}</p><p className="text-xs text-slate-400">Skipped</p></div>
-          </div>
-          <div className="mt-3 max-h-32 overflow-auto rounded-2xl bg-slate-50 p-3 text-xs text-slate-500">
-            {(Array.isArray(bulkJob.logs) ? bulkJob.logs : []).slice(-6).map((log, index) => <p key={index}>{log.message}</p>)}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

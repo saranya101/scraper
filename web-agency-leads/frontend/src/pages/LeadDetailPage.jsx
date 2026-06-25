@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowUpRight, Clipboard, Cpu, DollarSign, GitCompare, Globe2, History, Mail, MailCheck, MailPlus, MapPin, MessageCircle, Pencil, Phone, Plus, Search, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, Clipboard, Cpu, DollarSign, Eye, GitCompare, Globe2, History, Mail, MailCheck, MailPlus, MapPin, MessageCircle, Pencil, Phone, Plus, Search, ShieldCheck, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import LeadFormModal from "../components/LeadFormModal.jsx";
@@ -14,6 +14,30 @@ const techGroups = [
   ["Booking", [["Calendly", "bookingCalendly"], ["SimplyBook", "bookingSimplyBook"], ["Acuity", "bookingAcuity"]]],
   ["Marketing", [["Mailchimp", "marketingMailchimp"], ["HubSpot", "marketingHubspot"], ["Klaviyo", "marketingKlaviyo"]]],
   ["Chat", [["Intercom", "chatIntercom"], ["Tawk.to", "chatTawk"], ["Zendesk", "chatZendesk"]]]
+];
+
+const evidenceOrder = [
+  "phoneVisible",
+  "emailVisible",
+  "whatsappLinkPresent",
+  "contactFormPresent",
+  "bookingFormPresent",
+  "servicePagesPresent",
+  "projectCaseStudyPagesPresent",
+  "socialLinksPresent",
+  "basicSeoPresent",
+  "pageSpeedUsable",
+  "techStackDetected",
+  "awardsVisible",
+  "trustBadgesVisible",
+  "certificationsVisible",
+  "testimonialsVisible",
+  "reviewsVisible",
+  "ctaVisible",
+  "firstCtaScrollDepth",
+  "awardsBadgesScrollDepth",
+  "portfolioProjectVisuals",
+  "beforeAfterVisuals"
 ];
 
 function contactRows(lead) {
@@ -39,6 +63,12 @@ function fixMeta(fix, key) {
   return typeof fix === "string" ? null : fix[key];
 }
 
+function evidenceBadgeClass(value) {
+  if (value === "present") return "bg-emerald-100 text-emerald-800 ring-emerald-200";
+  if (value === "absent") return "bg-rose-100 text-rose-700 ring-rose-200";
+  return "bg-slate-100 text-slate-700 ring-slate-200";
+}
+
 export default function LeadDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -56,6 +86,9 @@ export default function LeadDetailPage() {
   const [notesOpen, setNotesOpen] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState("");
   const [editingNote, setEditingNote] = useState("");
+  const [evidence, setEvidence] = useState(null);
+  const [evidenceLoading, setEvidenceLoading] = useState(false);
+  const [correctionDrafts, setCorrectionDrafts] = useState({});
 
   async function loadLead() {
     setLoading(true);
@@ -95,6 +128,11 @@ export default function LeadDetailPage() {
     setEmailHistory(data);
   }
 
+  async function loadEvidence() {
+    const { data } = await api.get(`/evidence/${id}`);
+    setEvidence(data);
+  }
+
   useEffect(() => {
     loadLead();
   }, [id]);
@@ -103,6 +141,7 @@ export default function LeadDetailPage() {
     loadDrafts().catch(() => {});
     loadCompetitors().catch(() => {});
     loadEmailHistory().catch(() => {});
+    loadEvidence().catch(() => {});
   }, [id]);
 
   async function updateStatus(status) {
@@ -229,6 +268,38 @@ export default function LeadDetailPage() {
     loadLead();
   }
 
+  async function runEvidenceScan(mode) {
+    setEvidenceLoading(true);
+    try {
+      const { data } = await api.post(`/evidence/${id}/${mode}`);
+      setLead(data);
+      await loadEvidence();
+      push(mode === "vision" ? "Vision evidence scan saved" : "Cheap evidence scan saved");
+    } catch (error) {
+      push(error.response?.data?.message || "Could not run evidence scan", "error");
+    } finally {
+      setEvidenceLoading(false);
+    }
+  }
+
+  async function saveEvidenceCorrection(signalKey) {
+    const draft = correctionDrafts[signalKey] || {};
+    if (!draft.value) return push("Choose present, absent, or unknown first", "error");
+    const { data } = await api.post(`/evidence/${id}/corrections`, {
+      signalKey,
+      value: draft.value,
+      notes: draft.notes || ""
+    });
+    setEvidence((current) => ({
+      ...(current || {}),
+      corrections: [
+        data,
+        ...((current?.corrections || []).filter((item) => item.signalKey !== signalKey))
+      ]
+    }));
+    push("Evidence correction saved");
+  }
+
   if (loading || !lead) return <div className="rounded-3xl border border-slate-200 bg-white p-10 text-slate-500">Loading lead...</div>;
 
   const scoreRows = [
@@ -243,6 +314,13 @@ export default function LeadDetailPage() {
     ["Analytics", lead.analyticsScore],
     ["Contactability", lead.contactabilityScore || (lead.contactConfidence ? Math.round(lead.contactConfidence / 10) : null)]
   ];
+  const evidencePayload = evidence?.scanEvidence || lead.scanEvidence || {};
+  const evidenceSignals = evidencePayload.signals || {};
+  const correctionsBySignal = Object.fromEntries((evidence?.corrections || lead.evidenceCorrections || []).map((item) => [item.signalKey, item]));
+  const orderedEvidence = [
+    ...evidenceOrder.filter((key) => evidenceSignals[key]),
+    ...Object.keys(evidenceSignals).filter((key) => !evidenceOrder.includes(key))
+  ].map((key) => evidenceSignals[key]);
 
   return (
     <div className="space-y-6">
@@ -261,7 +339,10 @@ export default function LeadDetailPage() {
             {domain(lead.website)} <ArrowUpRight size={13} />
           </a>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <Link to={`/emails?leadId=${lead.id}`} className="inline-flex items-center justify-center gap-2 rounded-lg bg-white px-3.5 py-2 text-sm font-semibold text-slate-900 ring-1 ring-slate-200 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
+            <Mail size={16} /> Open in Emails
+          </Link>
           <Button variant="secondary" onClick={() => setModalOpen(true)}><Pencil size={16} /> Edit</Button>
           <Button variant="danger" onClick={removeLead}><Trash2 size={16} /> Delete</Button>
         </div>
@@ -374,6 +455,96 @@ export default function LeadDetailPage() {
               </ul>
             ) : (
               <p className="text-sm text-slate-500">No issues recorded yet.</p>
+            )}
+          </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <h2 className="flex items-center gap-2 text-lg font-semibold"><ShieldCheck size={18} /> Evidence collector V2</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Verified DOM, PageSpeed, and selected full-page visual signals. Unknown stays neutral until reviewed.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="secondary" onClick={() => runEvidenceScan("cheap")} disabled={evidenceLoading}>
+                  {evidenceLoading ? "Scanning..." : "Run cheap scan"}
+                </Button>
+                <Button onClick={() => runEvidenceScan("vision")} disabled={evidenceLoading}>
+                  {evidenceLoading ? "Scanning..." : "Run vision scan"}
+                </Button>
+              </div>
+            </div>
+
+            <div className="mb-4 grid gap-3 md:grid-cols-3">
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Detector</p>
+                <p className="mt-1 font-semibold">{evidencePayload.detectorVersion || "Not scanned"}</p>
+              </div>
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Last scan</p>
+                <p className="mt-1 font-semibold">{evidencePayload.visionScannedAt ? formatDate(evidencePayload.visionScannedAt) : evidencePayload.scannedAt ? formatDate(evidencePayload.scannedAt) : "Not scanned"}</p>
+              </div>
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Review status</p>
+                <p className="mt-1 font-semibold">{evidencePayload.reviewRequired ? "Needs review" : evidencePayload.status || "Not scanned"}</p>
+              </div>
+            </div>
+
+            {evidencePayload.fullPageScreenshotPath && (
+              <button type="button" onClick={() => window.open(evidencePayload.fullPageScreenshotPath, "_blank", "noopener,noreferrer")} className="mb-4 inline-flex items-center gap-2 rounded-xl bg-slate-950 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800">
+                <Eye size={15} /> View full-page evidence screenshot
+              </button>
+            )}
+
+            {orderedEvidence.length ? (
+              <div className="space-y-3">
+                {orderedEvidence.map((signal) => {
+                  const correction = correctionsBySignal[signal.key];
+                  const draft = correctionDrafts[signal.key] || {};
+                  const effectiveValue = correction?.value || signal.value;
+                  return (
+                    <div key={signal.key} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="font-semibold text-slate-950">{signal.label || signal.key}</p>
+                            <Badge className={evidenceBadgeClass(effectiveValue)}>{effectiveValue}</Badge>
+                            {correction && <Badge className="bg-indigo-100 text-indigo-800 ring-indigo-200">Manual truth</Badge>}
+                          </div>
+                          <p className="mt-2 text-sm leading-6 text-slate-600">{correction?.notes || signal.evidence}</p>
+                        </div>
+                        <div className="flex flex-wrap gap-2 text-xs">
+                          <Badge className="bg-white text-slate-700 ring-slate-200">{signal.source}</Badge>
+                          <Badge className="bg-white text-slate-700 ring-slate-200">{Math.round((signal.confidence || 0) * 100)}% confidence</Badge>
+                          {signal.scrollDepth != null && <Badge className="bg-white text-slate-700 ring-slate-200">{Math.round(signal.scrollDepth * 100)}% depth</Badge>}
+                        </div>
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-[1fr_220px]">
+                        <div className="space-y-2 text-sm text-slate-600">
+                          {signal.textRead && <p className="rounded-xl bg-white px-3 py-2"><span className="font-semibold text-slate-900">Text read:</span> {signal.textRead}</p>}
+                          {signal.region && <p className="rounded-xl bg-white px-3 py-2"><span className="font-semibold text-slate-900">Screenshot region:</span> [{signal.region.join(", ")}]</p>}
+                          <p className="rounded-xl bg-white px-3 py-2"><span className="font-semibold text-slate-900">Detector:</span> {signal.detectorVersion}</p>
+                        </div>
+                        <div className="space-y-2">
+                          <Select value={draft.value ?? correction?.value ?? ""} onChange={(event) => setCorrectionDrafts({ ...correctionDrafts, [signal.key]: { ...draft, value: event.target.value } })}>
+                            <option value="">Manual correction</option>
+                            <option value="present">Present</option>
+                            <option value="absent">Absent</option>
+                            <option value="unknown">Unknown</option>
+                          </Select>
+                          <Textarea className="min-h-20" value={draft.notes ?? correction?.notes ?? ""} onChange={(event) => setCorrectionDrafts({ ...correctionDrafts, [signal.key]: { ...draft, notes: event.target.value } })} placeholder="Optional reviewer notes" />
+                          <Button type="button" variant="secondary" className="w-full" onClick={() => saveEvidenceCorrection(signal.key)}>Save correction</Button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-dashed border-slate-300 p-6 text-sm text-slate-500">
+                No evidence collected yet. Run a cheap scan for DOM/PageSpeed facts, then vision scan only for selected high-value leads.
+              </div>
             )}
           </div>
 
@@ -627,7 +798,7 @@ export default function LeadDetailPage() {
                 <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                   <div>
                     <p className="font-semibold">{send.subject}</p>
-                    <p className="mt-1 text-sm text-slate-500">To {send.toEmail} from {send.emailAccount?.email || "connected sender"}</p>
+                    <p className="mt-1 text-sm text-slate-500">To {send.toEmail} from {send.emailAccount?.email || emailHistory.connectedAccounts?.[0]?.email || "hello@ocia.studio"}</p>
                   </div>
                   <Badge className={send.status === "SENT" ? "bg-emerald-100 text-emerald-800 ring-emerald-200" : send.status === "FAILED" ? "bg-rose-100 text-rose-700 ring-rose-200" : "bg-slate-100 text-slate-700 ring-slate-200"}>
                     {send.status}

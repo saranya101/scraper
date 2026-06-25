@@ -39,6 +39,28 @@ const initialForm = {
   websiteStatus: ""
 };
 
+function evidenceClass(status) {
+  if (status === "evidence_complete") return "bg-emerald-50 text-emerald-700 ring-emerald-200";
+  if (status === "evidence_failed_fallback" || status === "evidence_stale") return "bg-amber-50 text-amber-700 ring-amber-200";
+  if (status === "evidence_pending") return "bg-blue-50 text-blue-700 ring-blue-200";
+  return "bg-slate-100 text-slate-600 ring-slate-200";
+}
+
+function evidenceLabel(status) {
+  return {
+    evidence_complete: "complete",
+    evidence_pending: "pending",
+    evidence_failed_fallback: "failed fallback",
+    evidence_stale: "stale",
+    evidence_not_run: "not run"
+  }[status] || "not run";
+}
+
+function resultEvidenceStatus(result) {
+  const status = result.evidenceStatus || result.scanEvidence?.status || "evidence_not_run";
+  return { label: `Evidence ${evidenceLabel(status)}`, className: evidenceClass(status) };
+}
+
 export default function ScannerPage() {
   const { push } = useToast();
   const [searchParams] = useSearchParams();
@@ -447,9 +469,17 @@ export default function ScannerPage() {
                   <button type="button" onClick={() => setActiveJob(job)} className="block w-full text-left">
                     <div className="flex items-center justify-between gap-3">
                       <p className="font-semibold">{job.keyword}</p>
-                      <Badge className="bg-slate-100 text-slate-700 ring-slate-200">{job.status}</Badge>
+                      <div className="flex flex-wrap justify-end gap-2">
+                        <Badge className="bg-slate-100 text-slate-700 ring-slate-200">{job.status}</Badge>
+                        <Badge className={evidenceClass(job.evidenceSummary?.status)}>Evidence {evidenceLabel(job.evidenceSummary?.status)}</Badge>
+                      </div>
                     </div>
-                    <p className="mt-1 text-sm text-slate-500">{job.location} · {job._count?.results || 0} results</p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      {job.location} · {job._count?.results || 0} results · {job.evidenceSummary?.completed || 0} complete
+                      {job.evidenceSummary?.pending ? ` · ${job.evidenceSummary.pending} pending` : ""}
+                      {job.evidenceSummary?.failed ? ` · ${job.evidenceSummary.failed} failed fallback` : ""}
+                      {job.evidenceSummary?.stale ? ` · ${job.evidenceSummary.stale} stale` : ""}
+                    </p>
                   </button>
                   <div className="mt-3 flex items-center justify-between">
                     <span className="text-xs text-slate-400">{formatDate(job.createdAt)}</span>
@@ -523,6 +553,7 @@ export default function ScannerPage() {
                   <div className="flex flex-wrap gap-2 md:justify-end">
                     <Badge className={priorities[result.priority]?.className}>{priorities[result.priority]?.label}</Badge>
                     <Badge className={websiteStatuses[result.websiteStatus]?.className}>{websiteStatuses[result.websiteStatus]?.label}</Badge>
+                    <Badge className={resultEvidenceStatus(result).className}>{resultEvidenceStatus(result).label}</Badge>
                     {result.duplicate && <Badge className="bg-zinc-100 text-zinc-700 ring-zinc-200">Duplicate</Badge>}
                     {result.imported && <Badge className="bg-emerald-50 text-emerald-700 ring-emerald-200"><CheckCircle2 size={12} /> Imported</Badge>}
                   </div>

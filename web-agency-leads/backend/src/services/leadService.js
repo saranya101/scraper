@@ -20,6 +20,10 @@ const includeLead = {
   serviceOpportunities: {
     include: { service: true },
     orderBy: [{ recommended: "desc" }, { score: "desc" }]
+  },
+  evidenceCorrections: {
+    orderBy: { updatedAt: "desc" },
+    include: { user: { select: { id: true, name: true, email: true } } }
   }
 };
 

@@ -26,7 +26,89 @@ const leadInclude = {
   }
 };
 
+const outreachEvidenceMap = {
+  bookingFormPresent: {
+    observation: "I could not find a clear online booking or appointment path on the website",
+    impact: "That can add friction for visitors who are ready to make an enquiry."
+  },
+  contactFormPresent: {
+    observation: "I could not find a clear contact form on the website",
+    impact: "That can make it harder for interested visitors to take the next step."
+  },
+  phoneVisible: {
+    observation: "a phone number was not clearly visible on the pages reviewed",
+    impact: "That can slow down enquiries from visitors who prefer to call."
+  },
+  emailVisible: {
+    observation: "an email address was not clearly visible on the pages reviewed",
+    impact: "That can make direct enquiries less convenient."
+  },
+  servicePagesPresent: {
+    observation: "I could not find clear dedicated pages for the main services",
+    impact: "That can make it harder for visitors and search engines to understand the full offer."
+  },
+  projectCaseStudyPagesPresent: {
+    observation: "I could not find a clear portfolio, project, or case-study section",
+    impact: "That can limit the proof visitors see before deciding to enquire."
+  },
+  basicSeoPresent: {
+    observation: "some core search metadata or page-heading signals appear to be incomplete",
+    impact: "That can reduce how clearly the site communicates its relevance in search."
+  },
+  pageSpeedUsable: {
+    observation: "the site took longer than expected to load during the scan",
+    impact: "Slower pages can cause potential customers to leave before enquiring."
+  }
+};
+
+function verifiedOutreachObservation(lead) {
+  const corrections = new Map((lead.evidenceCorrections || []).map((item) => [item.signalKey, item]));
+  const signals = lead.scanEvidence?.signals || {};
+  const machineEvidenceUsable = ["evidence_complete", "COMPLETED"].includes(lead.scanEvidence?.status);
+  for (const [signalKey, copy] of Object.entries(outreachEvidenceMap)) {
+    const correction = corrections.get(signalKey);
+    if (correction) {
+      if (correction.value === "absent") return { ...copy, source: "manual", evidence: correction.notes || "Manually reviewed." };
+      continue;
+    }
+    if (!machineEvidenceUsable) continue;
+    const signal = signals[signalKey];
+    if (signal?.value === "absent" && Number(signal.confidence || 0) >= 0.82 && signal.evidence) {
+      return { ...copy, source: signal.source, evidence: signal.evidence };
+    }
+  }
+  return null;
+}
+
+function evidenceBackedEmailDraft(lead, tone) {
+  const verified = verifiedOutreachObservation(lead);
+  const opener = verified
+    ? `I had a quick look at ${lead.company} and noticed ${verified.observation}.`
+    : `I had a quick look at ${lead.company}.`;
+  const pitch = verified ? `For example: ${verified.impact}` : "";
+  const cta = "If useful, I can send over a few practical ideas for improving this.";
+  return {
+    subject: `Quick idea for ${lead.company}`,
+    opener,
+    pitch,
+    cta,
+    fullMessage: [
+      "Hi there,",
+      "",
+      opener,
+      ...(pitch ? ["", pitch] : []),
+      "",
+      cta,
+      "",
+      "Best,",
+      "Ocia Studio"
+    ].join("\n"),
+    tone
+  };
+}
+
 function fallbackDraft(lead, type, tone) {
+  if (type === "EMAIL") return evidenceBackedEmailDraft(lead, tone);
   const service = lead.serviceOpportunities?.[0];
   const serviceName = service?.service?.name || "website improvements";
   const issue = lead.issues?.[0]?.issueText || "a few conversion and trust opportunities on the site";
@@ -178,6 +260,7 @@ async function leadContext(leadId) {
     where: { id: leadId },
     include: {
       issues: { orderBy: { createdAt: "asc" } },
+      evidenceCorrections: { orderBy: { updatedAt: "desc" } },
       serviceOpportunities: {
         include: { service: true },
         orderBy: [{ recommended: "desc" }, { score: "desc" }]
@@ -193,12 +276,14 @@ export async function generateDraft(leadId, userId, input = {}) {
   const type = outreachTypes.includes(input.type) ? input.type : "EMAIL";
   const tone = input.tone || "consultative";
   const lead = await leadContext(leadId);
-  const generated = normalizeGeneratedDraft(
-    await generateWithOpenAI({ lead, type, tone }).catch(() => fallbackDraft(lead, type, tone)),
-    lead,
-    type,
-    tone
-  );
+  const generated = type === "EMAIL"
+    ? evidenceBackedEmailDraft(lead, tone)
+    : normalizeGeneratedDraft(
+        await generateWithOpenAI({ lead, type, tone }).catch(() => fallbackDraft(lead, type, tone)),
+        lead,
+        type,
+        tone
+      );
 
   const draft = await prisma.outreachDraft.create({
     data: {

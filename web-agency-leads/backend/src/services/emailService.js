@@ -3,6 +3,7 @@ import axios from "axios";
 import jwt from "jsonwebtoken";
 import { prisma } from "../repositories/prisma.js";
 import { HttpError, notFound } from "../utils/httpError.js";
+import * as resendService from "./resendService.js";
 
 const providers = {
   GOOGLE: {
@@ -10,26 +11,24 @@ const providers = {
     tokenUrl: "https://oauth2.googleapis.com/token",
     userInfoUrl: "https://www.googleapis.com/oauth2/v2/userinfo",
     sendUrl: "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
-    scopes: ["openid", "email", "profile", "https://www.googleapis.com/auth/gmail.send"],
+    scopes: ["openid", "email", "https://www.googleapis.com/auth/gmail.send"],
     env: {
       clientId: "GOOGLE_CLIENT_ID",
       clientSecret: "GOOGLE_CLIENT_SECRET",
       redirectUri: "GOOGLE_REDIRECT_URI"
     }
-  },
-  MICROSOFT: {
-    authUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
-    tokenUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
-    userInfoUrl: "https://graph.microsoft.com/v1.0/me",
-    sendUrl: "https://graph.microsoft.com/v1.0/me/sendMail",
-    scopes: ["offline_access", "openid", "email", "profile", "User.Read", "Mail.Send"],
-    env: {
-      clientId: "MICROSOFT_CLIENT_ID",
-      clientSecret: "MICROSOFT_CLIENT_SECRET",
-      redirectUri: "MICROSOFT_REDIRECT_URI"
-    }
   }
 };
+
+function activeProvider() {
+  return String(process.env.EMAIL_PROVIDER || "GMAIL").toUpperCase();
+}
+
+function allowedGoogleEmail() {
+  const email = String(process.env.GOOGLE_OAUTH_ALLOWED_EMAIL || "").trim().toLowerCase();
+  if (!email) throw new HttpError(500, "GOOGLE_OAUTH_ALLOWED_EMAIL is required for Gmail testing mode");
+  return email;
+}
 
 function config(provider) {
   const item = providers[provider];
@@ -38,7 +37,7 @@ function config(provider) {
   const clientSecret = process.env[item.env.clientSecret];
   const redirectUri = process.env[item.env.redirectUri];
   if (!clientId || !clientSecret || !redirectUri) {
-    throw new HttpError(400, `${provider === "GOOGLE" ? "Google" : "Microsoft"} OAuth environment variables are missing`);
+    throw new HttpError(400, "Google OAuth environment variables are missing");
   }
   return { ...item, clientId, clientSecret, redirectUri };
 }
@@ -83,19 +82,27 @@ function publicAccount(account) {
     email: account.email,
     expiresAt: account.expiresAt,
     connectedAt: account.connectedAt,
-    updatedAt: account.updatedAt
+    updatedAt: account.updatedAt,
+    configured: true,
+    active: activeProvider() === "GMAIL",
+    testingMode: true,
+    allowedEmail: allowedGoogleEmail()
   };
 }
 
 export async function listAccounts(userId) {
-  const accounts = await prisma.emailAccount.findMany({
-    where: { userId },
-    orderBy: [{ connectedAt: "desc" }]
+  void userId;
+  if (activeProvider() === "RESEND") return [resendService.senderDetails()];
+  const account = await prisma.emailAccount.findFirst({
+    where: { provider: "GOOGLE", email: allowedGoogleEmail() },
+    orderBy: { updatedAt: "desc" }
   });
-  return accounts.map(publicAccount);
+  return account ? [publicAccount(account)] : [];
 }
 
 export async function connectUrl(provider, userId) {
+  if (activeProvider() !== "GMAIL") throw new HttpError(409, "Gmail is not the active email provider");
+  if (provider !== "GOOGLE") throw new HttpError(422, "Only Google OAuth is available in single-sender testing mode");
   const cfg = config(provider);
   const params = new URLSearchParams({
     client_id: cfg.clientId,
@@ -107,9 +114,6 @@ export async function connectUrl(provider, userId) {
   if (provider === "GOOGLE") {
     params.set("access_type", "offline");
     params.set("prompt", "consent");
-  }
-  if (provider === "MICROSOFT") {
-    params.set("prompt", "select_account");
   }
   return { authUrl: `${cfg.authUrl}?${params.toString()}` };
 }
@@ -156,24 +160,34 @@ async function accessToken(account) {
 
 async function connectedEmail(provider, tokenResponse) {
   const cfg = config(provider);
-  if (provider === "GOOGLE") {
-    const { data } = await axios.get(cfg.userInfoUrl, { headers: { Authorization: `Bearer ${tokenResponse.access_token}` }, timeout: 15000 });
-    return data.email;
-  }
   const { data } = await axios.get(cfg.userInfoUrl, { headers: { Authorization: `Bearer ${tokenResponse.access_token}` }, timeout: 15000 });
-  return data.mail || data.userPrincipalName;
+  return data.email;
 }
 
 export async function completeOAuth({ code, state }) {
   if (!code || !state) throw new HttpError(400, "Missing OAuth code or state");
   const payload = decodeState(state);
   const provider = payload.provider;
+  if (activeProvider() !== "GMAIL" || provider !== "GOOGLE") throw new HttpError(403, "Only Google OAuth is enabled");
   const tokenResponse = await exchangeCode(provider, code);
-  if (!tokenResponse.access_token || !tokenResponse.refresh_token) {
-    throw new HttpError(400, "OAuth provider did not return the required tokens. Try reconnecting and accepting offline access.");
-  }
-  const email = await connectedEmail(provider, tokenResponse);
+  if (!tokenResponse.access_token) throw new HttpError(400, "Google OAuth did not return an access token");
+  const email = String(await connectedEmail(provider, tokenResponse) || "").toLowerCase();
   if (!email) throw new HttpError(400, "Could not read connected email address");
+  if (email.toLowerCase() !== allowedGoogleEmail()) {
+    throw new HttpError(403, `Only ${allowedGoogleEmail()} is allowed to connect and send`);
+  }
+  const existingAccount = await prisma.emailAccount.findUnique({
+    where: { userId_provider_email: { userId: payload.sub, provider, email } }
+  });
+  if (!tokenResponse.refresh_token && !existingAccount?.refreshTokenEncrypted) {
+    throw new HttpError(400, "Google did not return offline access. Remove the app from your Google account permissions, then reconnect.");
+  }
+  await prisma.emailAccount.deleteMany({
+    where: {
+      provider: "GOOGLE",
+      OR: [{ email: { not: allowedGoogleEmail() } }, { userId: { not: payload.sub } }]
+    }
+  });
   const account = await prisma.emailAccount.upsert({
     where: { userId_provider_email: { userId: payload.sub, provider, email } },
     create: {
@@ -186,7 +200,7 @@ export async function completeOAuth({ code, state }) {
     },
     update: {
       accessTokenEncrypted: encrypt(tokenResponse.access_token),
-      refreshTokenEncrypted: encrypt(tokenResponse.refresh_token),
+      ...(tokenResponse.refresh_token ? { refreshTokenEncrypted: encrypt(tokenResponse.refresh_token) } : {}),
       expiresAt: tokenResponse.expires_in ? new Date(Date.now() + Number(tokenResponse.expires_in) * 1000) : null
     }
   });
@@ -194,23 +208,34 @@ export async function completeOAuth({ code, state }) {
 }
 
 export async function disconnect(id, userId) {
-  const account = await prisma.emailAccount.findFirst({ where: { id, userId } });
+  void userId;
+  const account = await prisma.emailAccount.findFirst({ where: { id, provider: "GOOGLE", email: allowedGoogleEmail() } });
   if (!account) throw notFound("Email account not found");
   await prisma.emailAccount.delete({ where: { id } });
   return { disconnected: true };
 }
 
-function makeRfcMessage({ from, toEmail, subject, body }) {
+function escapeHtml(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function makeGmailMessage({ from, toEmail, subject, body }) {
   const message = [
     `From: ${from}`,
     `To: ${toEmail}`,
     `Subject: ${subject}`,
     "MIME-Version: 1.0",
     "Content-Type: text/plain; charset=utf-8",
+    "Content-Transfer-Encoding: 8bit",
     "",
     body
   ].join("\r\n");
-  return Buffer.from(message).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  return Buffer.from(message).toString("base64url");
 }
 
 async function dailyLimit(userId) {
@@ -235,27 +260,28 @@ export async function getCooldownDays() {
   return cooldownDays();
 }
 
-async function providerSend({ account, token, toEmail, subject, body }) {
-  if (account.provider === "GOOGLE") {
+async function gmailAccount() {
+  const account = await prisma.emailAccount.findFirst({
+    where: { provider: "GOOGLE", email: allowedGoogleEmail() },
+    orderBy: { updatedAt: "desc" }
+  });
+  if (!account) throw new HttpError(422, `Connect ${allowedGoogleEmail()} in Email Settings before sending`);
+  return account;
+}
+
+async function providerSend({ account, toEmail, subject, body }) {
+  if (activeProvider() === "GMAIL") {
+    const cfg = config("GOOGLE");
     await axios.post(
-      providers.GOOGLE.sendUrl,
-      { raw: makeRfcMessage({ from: account.email, toEmail, subject, body }) },
-      { headers: { Authorization: `Bearer ${token}` }, timeout: 30000 }
+      cfg.sendUrl,
+      { raw: makeGmailMessage({ from: account.email, toEmail, subject, body }) },
+      { headers: { Authorization: `Bearer ${await accessToken(account)}` }, timeout: 30000 }
     );
-    return;
+    return { provider: "GMAIL", senderEmail: account.email };
   }
-  await axios.post(
-    providers.MICROSOFT.sendUrl,
-    {
-      message: {
-        subject,
-        body: { contentType: "Text", content: body },
-        toRecipients: [{ emailAddress: { address: toEmail } }]
-      },
-      saveToSentItems: true
-    },
-    { headers: { Authorization: `Bearer ${token}` }, timeout: 30000 }
-  );
+  const html = `<div style="font-family:Inter,Arial,sans-serif;font-size:15px;line-height:1.65;color:#18181b;white-space:pre-wrap">${escapeHtml(body)}</div>`;
+  await resendService.sendEmail({ to: toEmail, subject, html, text: body });
+  return { provider: "RESEND", senderEmail: resendService.senderDetails().email };
 }
 
 export async function sendEmail(userId, input = {}) {
@@ -279,30 +305,28 @@ export async function sendEmail(userId, input = {}) {
     throw new HttpError(409, `Lead was contacted recently. Cooldown is ${cooldown} days.`);
   }
 
-  const account = input.emailAccountId
-    ? await prisma.emailAccount.findFirst({ where: { id: input.emailAccountId, userId } })
-    : await prisma.emailAccount.findFirst({ where: { userId }, orderBy: { connectedAt: "desc" } });
-  if (!account) throw new HttpError(422, "Connect Gmail or Outlook before sending");
-
   const limit = await dailyLimit(userId);
   if (limit.remaining <= 0) throw new HttpError(429, `Daily email send limit reached (${limit.limit})`);
-
+  const provider = activeProvider();
+  if (!["GMAIL", "RESEND"].includes(provider)) throw new HttpError(500, `Unsupported EMAIL_PROVIDER: ${provider}`);
+  const account = provider === "GMAIL" ? await gmailAccount() : null;
   const sendRecord = await prisma.emailSend.create({
     data: {
       leadId,
       outreachDraftId: input.outreachDraftId || null,
       userId,
-      emailAccountId: account.id,
+      emailAccountId: account?.id || null,
       toEmail,
       subject,
       body,
+      provider,
       mode: input.mode || "MANUAL_APPROVAL",
       status: "PENDING"
     }
   });
 
   try {
-    await providerSend({ account, token: await accessToken(account), toEmail, subject, body });
+    const delivery = await providerSend({ account, toEmail, subject, body });
     if (input.testOnly) {
       return prisma.emailSend.update({
         where: { id: sendRecord.id },
@@ -314,7 +338,9 @@ export async function sendEmail(userId, input = {}) {
       const updatedSend = await tx.emailSend.update({
         where: { id: sendRecord.id },
         data: { status: "SENT", sentAt: new Date() },
-        include: { emailAccount: { select: { id: true, provider: true, email: true } } }
+        include: {
+          emailAccount: { select: { id: true, provider: true, email: true } }
+        }
       });
       if (input.outreachDraftId) {
         await tx.outreachDraft.update({ where: { id: input.outreachDraftId }, data: { status: "SENT" } });
@@ -341,7 +367,7 @@ export async function sendEmail(userId, input = {}) {
           newStage: "SENT"
         }
       });
-      await tx.leadNote.create({ data: { leadId, userId, note: `Sent email to ${toEmail} from ${account.email}.` } });
+      await tx.leadNote.create({ data: { leadId, userId, note: `Sent email to ${toEmail} from ${delivery.senderEmail} via ${delivery.provider}.` } });
       return updatedSend;
     });
     return sent;
@@ -349,7 +375,9 @@ export async function sendEmail(userId, input = {}) {
     const failed = await prisma.emailSend.update({
       where: { id: sendRecord.id },
       data: { status: "FAILED", mode: input.mode || "MANUAL_APPROVAL", errorMessage: error.response?.data?.error?.message || error.message || "Email send failed" },
-      include: { emailAccount: { select: { id: true, provider: true, email: true } } }
+      include: {
+        emailAccount: { select: { id: true, provider: true, email: true } }
+      }
     });
     return failed;
   }

@@ -10,21 +10,26 @@ const router = Router();
 const sendBody = z.object({
   leadId: z.string().min(1),
   outreachDraftId: z.string().optional().nullable(),
-  emailAccountId: z.string().optional().nullable(),
   toEmail: z.string().email(),
   subject: z.string().min(1),
   body: z.string().min(1)
 });
 
+const resendTestBody = z.object({
+  leadId: z.string().min(1),
+  toEmail: z.string().email(),
+  subject: z.string().optional(),
+  body: z.string().optional()
+});
+
 router.get("/callback/google", asyncHandler(emailController.callback));
-router.get("/callback/microsoft", asyncHandler(emailController.callback));
 
 router.use(requireAuth);
 router.get("/accounts", asyncHandler(emailController.accounts));
 router.post("/connect/google", asyncHandler(emailController.connectGoogle));
-router.post("/connect/microsoft", asyncHandler(emailController.connectMicrosoft));
 router.post("/disconnect/:id", asyncHandler(emailController.disconnect));
 router.post("/send", validate({ parse: (value) => z.object({ body: sendBody }).parse(value) }), asyncHandler(emailController.send));
+router.post("/test", validate({ parse: (value) => z.object({ body: resendTestBody }).parse(value) }), asyncHandler(emailController.test));
 router.get("/history/:leadId", asyncHandler(emailController.history));
 
 export default router;

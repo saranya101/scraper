@@ -10,6 +10,7 @@ import { searchGooglePlaces } from "./placesService.js";
 import { absoluteUploadPath, createBrowser, scanWebsite } from "./websiteScannerService.js";
 import { auditCriteriaFor, getIndustryProfile, getIndustryProfileConfig } from "./industryProfileService.js";
 import * as serviceOpportunityService from "./serviceOpportunityService.js";
+import { createScanInputHash, getDetectorVersion, isFreshCheapEvidence, pendingCheapEvidence, runQueuedCheapEvidenceJob, staleCheapEvidence } from "./evidenceService.js";
 const defaultAudit = {
   score: 7,
   visualDesignScore: 7,
@@ -29,6 +30,8 @@ const defaultAudit = {
   recommendedFixes: ["Review the screenshots and website manually, then rerun the scan later."],
   outreachEmail: ""
 };
+const queuedEvidenceKeys = new Set();
+const evidencePendingTimeoutMs = Number(process.env.EVIDENCE_PENDING_TIMEOUT_MS || 10 * 60 * 1000);
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -209,11 +212,15 @@ async function createLeadFromScanResultData(resultData) {
   if (!website) return { imported: false, duplicate: false };
 
   const domain = websiteDomainKey(website);
-  const possible = await prisma.lead.findMany({ select: { id: true, website: true } });
+  const possible = await prisma.lead.findMany({ select: { id: true, website: true, scanEvidence: true } });
   const existing = possible.find((lead) => websiteDomainKey(lead.website) === domain);
+  const scanInputHash = scanInputHashFromResultData(resultData);
   if (existing) {
+    if (!hasFreshCheapEvidence(existing.scanEvidence, scanInputHash) && resultData.scanEvidence) {
+      await prisma.lead.update({ where: { id: existing.id }, data: { scanEvidence: resultData.scanEvidence } });
+    }
     await serviceOpportunityService.generateForLead(existing.id);
-    return { imported: false, duplicate: true };
+    return { imported: false, duplicate: true, leadId: existing.id };
   }
 
   const lead = await prisma.lead.create({
@@ -269,6 +276,7 @@ async function createLeadFromScanResultData(resultData) {
       contactConfidence: resultData.contactConfidence,
       contactSource: resultData.contactSource,
       recommendedFixes: resultData.recommendedFixes,
+      scanEvidence: resultData.scanEvidence || null,
       issues: { create: (Array.isArray(resultData.issues) ? resultData.issues : []).map((issueText) => ({ issueText: String(issueText) })) }
     }
   });
@@ -280,7 +288,11 @@ async function createLeadFromScanResultData(resultData) {
   if (screenshots.length) await prisma.screenshot.createMany({ data: screenshots });
   await serviceOpportunityService.generateForLead(lead.id);
 
-  return { imported: true, duplicate: false };
+  return { imported: true, duplicate: false, leadId: lead.id };
+}
+
+function hasFreshCheapEvidence(scanEvidence, scanInputHash) {
+  return isFreshCheapEvidence(scanEvidence, scanInputHash);
 }
 
 function contactAndTechFields(extracted = {}) {
@@ -311,9 +323,58 @@ function contactAndTechFields(extracted = {}) {
   };
 }
 
+function scanInputHashFromResultData(resultData = {}) {
+  return createScanInputHash({
+    website: resultData.website,
+    statusCode: resultData.statusCode,
+    loadTime: resultData.loadTime,
+    rawExtractedData: resultData.rawExtractedData || {}
+  });
+}
+
+function evidenceStatusForResultData(resultData = {}, leadId = null, scanResultId = null) {
+  const scanInputHash = scanInputHashFromResultData(resultData);
+  if (isFreshCheapEvidence(resultData.scanEvidence, scanInputHash)) return resultData.scanEvidence;
+  const stale = resultData.scanEvidence ? staleCheapEvidence(resultData.scanEvidence) : null;
+  return {
+    ...(stale || pendingCheapEvidence({ leadId, scanResultId, scanInputHash })),
+    ...pendingCheapEvidence({ leadId, scanResultId, scanInputHash })
+  };
+}
+
+async function queueCheapEvidenceJob({ jobId, company, leadId, scanResultId, scanInputHash }) {
+  const detectorVersion = getDetectorVersion();
+  const queueKey = `evidence:${leadId || "no-lead"}:${scanInputHash}:${detectorVersion}`;
+  if (queuedEvidenceKeys.has(queueKey)) return;
+  queuedEvidenceKeys.add(queueKey);
+  enqueue(queueKey, async () => {
+    try {
+      const result = await runQueuedCheapEvidenceJob({ leadId, scanResultId, scanInputHash, detectorVersion });
+      if (result?.discarded) {
+        await addLog(jobId, `Discarded stale cheap evidence for ${company}: ${result.reason}.`).catch(() => {});
+      } else {
+        await addLog(jobId, `Cheap evidence finished for ${company}.`).catch(() => {});
+      }
+    } finally {
+      queuedEvidenceKeys.delete(queueKey);
+    }
+  }).catch(async (error) => {
+    queuedEvidenceKeys.delete(queueKey);
+    await addLog(jobId, `Cheap evidence worker failed for ${company}: ${error.message}`).catch(() => {});
+  });
+}
+
+function evidenceStatus(scanEvidence) {
+  if (!scanEvidence) return "evidence_not_run";
+  if (scanEvidence.status === "evidence_pending" && scanEvidence.queuedAt && Date.now() - new Date(scanEvidence.queuedAt).getTime() > evidencePendingTimeoutMs) {
+    return "evidence_stale";
+  }
+  return scanEvidence.status || "evidence_not_run";
+}
+
 function resultDataFromScan({ job, business, capture, audit, duplicate }) {
   const intelligence = contactAndTechFields(capture.extracted || {});
-  return {
+  const resultData = {
     scanJobId: job.id,
     company: business.company,
     website: capture.website || normalizeWebsiteRoot(business.website),
@@ -343,6 +404,10 @@ function resultDataFromScan({ job, business, capture, audit, duplicate }) {
     mobileScreenshotPath: capture.mobileScreenshotPath,
     duplicate
   };
+  return {
+    ...resultData,
+    scanEvidence: evidenceStatusForResultData(resultData)
+  };
 }
 
 async function saveResultAndLead(resultData, existingWebsites) {
@@ -353,10 +418,16 @@ async function saveResultAndLead(resultData, existingWebsites) {
   ].filter(Boolean);
   if (screenshots.length) await prisma.screenshot.createMany({ data: screenshots });
   const leadImport = await createLeadFromScanResultData(resultData);
+  const scanInputHash = scanInputHashFromResultData(resultData);
+  const stampedEvidence = pendingCheapEvidence({ leadId: leadImport.leadId || null, scanResultId: saved.id, scanInputHash });
   await prisma.scanResult.update({
     where: { id: saved.id },
-    data: { imported: leadImport.imported, duplicate: leadImport.duplicate || resultData.duplicate }
+    data: { imported: leadImport.imported, duplicate: leadImport.duplicate || resultData.duplicate, scanEvidence: stampedEvidence }
   });
+  if (leadImport.leadId) {
+    await prisma.lead.update({ where: { id: leadImport.leadId }, data: { scanEvidence: stampedEvidence } }).catch(() => {});
+  }
+  queueCheapEvidenceJob({ jobId: resultData.scanJobId, company: resultData.company, leadId: leadImport.leadId || null, scanResultId: saved.id, scanInputHash });
   if (leadImport.imported && resultData.website) existingWebsites?.add(websiteDomainKey(resultData.website));
   return saved;
 }
@@ -622,10 +693,32 @@ export async function runBulkScan(input, userId) {
 }
 
 export async function getHistory() {
-  return prisma.scanJob.findMany({
+  const jobs = await prisma.scanJob.findMany({
     orderBy: { createdAt: "desc" },
-    include: { _count: { select: { results: true } } },
+    include: {
+      _count: { select: { results: true } },
+      results: { select: { scanEvidence: true } }
+    },
     take: 30
+  });
+  return jobs.map(({ results, ...job }) => {
+    const statuses = results.map((result) => evidenceStatus(result.scanEvidence));
+    const completed = statuses.filter((status) => status === "evidence_complete").length;
+    const failed = statuses.filter((status) => status === "evidence_failed_fallback").length;
+    const stale = statuses.filter((status) => status === "evidence_stale").length;
+    const pending = statuses.filter((status) => status === "evidence_pending").length;
+    const missing = statuses.filter((status) => status === "evidence_not_run").length;
+    return {
+      ...job,
+      evidenceSummary: {
+        completed,
+        failed,
+        stale,
+        pending,
+        missing,
+        status: !job._count?.results ? "evidence_not_run" : stale ? "evidence_stale" : failed ? "evidence_failed_fallback" : pending ? "evidence_pending" : missing ? "evidence_not_run" : "evidence_complete"
+      }
+    };
   });
 }
 
@@ -679,6 +772,7 @@ export async function getResults(scanJobId, query = {}) {
   const leadByDomain = new Map(leads.map((lead) => [websiteDomainKey(lead.website), lead.id]));
   const items = results.map((result) => ({
     ...result,
+    evidenceStatus: evidenceStatus(result.scanEvidence),
     leadId: result.website ? leadByDomain.get(websiteDomainKey(result.website)) || null : null
   }));
   return { items, summary: scanSummary(results) };
@@ -691,6 +785,7 @@ export async function importResults(scanResultIds, userId) {
 
   for (const result of results) {
     const website = normalizeWebsiteRoot(result.website);
+    const scanInputHash = scanInputHashFromResultData(result);
     if (!website) {
       skipped += 1;
       continue;
@@ -698,6 +793,16 @@ export async function importResults(scanResultIds, userId) {
 
     const exists = await prisma.lead.findUnique({ where: { website } });
     if (exists) {
+      if (!hasFreshCheapEvidence(exists.scanEvidence, scanInputHash)) {
+        const evidence = isFreshCheapEvidence(result.scanEvidence, scanInputHash)
+          ? result.scanEvidence
+          : pendingCheapEvidence({ leadId: exists.id, scanResultId: result.id, scanInputHash });
+        await prisma.lead.update({ where: { id: exists.id }, data: { scanEvidence: evidence } });
+        await prisma.scanResult.update({ where: { id: result.id }, data: { scanEvidence: evidence } });
+        if (evidence.status === "evidence_pending") {
+          queueCheapEvidenceJob({ jobId: result.scanJobId, company: result.company, leadId: exists.id, scanResultId: result.id, scanInputHash });
+        }
+      }
       await prisma.scanResult.update({ where: { id: result.id }, data: { duplicate: true } });
       skipped += 1;
       continue;
@@ -756,9 +861,13 @@ export async function importResults(scanResultIds, userId) {
         contactConfidence: result.contactConfidence,
         contactSource: result.contactSource,
         recommendedFixes: result.recommendedFixes,
+        scanEvidence: isFreshCheapEvidence(result.scanEvidence, scanInputHash) ? result.scanEvidence : pendingCheapEvidence({ scanResultId: result.id, scanInputHash }),
         issues: { create: (Array.isArray(result.issues) ? result.issues : []).map((issueText) => ({ issueText: String(issueText) })) }
       }
     });
+    const evidence = isFreshCheapEvidence(result.scanEvidence, scanInputHash)
+      ? result.scanEvidence
+      : pendingCheapEvidence({ leadId: lead.id, scanResultId: result.id, scanInputHash });
 
     const screenshots = [
       result.screenshotPath ? { leadId: lead.id, imagePath: result.screenshotPath, type: "DESKTOP" } : null,
@@ -766,7 +875,11 @@ export async function importResults(scanResultIds, userId) {
     ].filter(Boolean);
     if (screenshots.length) await prisma.screenshot.createMany({ data: screenshots });
     await serviceOpportunityService.generateForLead(lead.id);
-    await prisma.scanResult.update({ where: { id: result.id }, data: { imported: true } });
+    await prisma.lead.update({ where: { id: lead.id }, data: { scanEvidence: evidence } });
+    await prisma.scanResult.update({ where: { id: result.id }, data: { imported: true, scanEvidence: evidence } });
+    if (evidence.status === "evidence_pending") {
+      queueCheapEvidenceJob({ jobId: result.scanJobId, company: result.company, leadId: lead.id, scanResultId: result.id, scanInputHash });
+    }
     imported += 1;
   }
 
@@ -876,10 +989,16 @@ export async function retryFailedResult(scanResultId, userId) {
         }
       });
       const leadImport = await createLeadFromScanResultData(resultData);
+      const scanInputHash = scanInputHashFromResultData(resultData);
+      const evidence = pendingCheapEvidence({ leadId: leadImport.leadId || null, scanResultId, scanInputHash });
       await prisma.scanResult.update({
         where: { id: scanResultId },
-        data: { imported: leadImport.imported, duplicate: leadImport.duplicate || result.duplicate }
+        data: { imported: leadImport.imported, duplicate: leadImport.duplicate || result.duplicate, scanEvidence: evidence }
       });
+      if (leadImport.leadId) {
+        await prisma.lead.update({ where: { id: leadImport.leadId }, data: { scanEvidence: evidence } }).catch(() => {});
+      }
+      queueCheapEvidenceJob({ jobId: job.id, company: business.company, leadId: leadImport.leadId || null, scanResultId, scanInputHash });
       await addLog(job.id, `Retry finished for ${business.company}.`);
     } catch (error) {
       await addLog(result.scanJobId, `Retry failed for ${business.company}: ${error.message}`);

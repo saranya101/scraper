@@ -1,5 +1,5 @@
 import { prisma } from "../repositories/prisma.js";
-import { HttpError, notFound } from "../utils/httpError.js";
+import { HttpError } from "../utils/httpError.js";
 import * as emailService from "./emailService.js";
 import * as outreachService from "./outreachService.js";
 
@@ -122,128 +122,25 @@ export async function sendTest(userId, input = {}) {
 }
 
 export async function sendBulkApproved(userId, input = {}) {
-  const items = Array.isArray(input.items) ? input.items : [];
-  if (!items.length) throw new HttpError(422, "Add at least one approved email");
-  const results = [];
-  for (const item of items) {
-    const result = await sendOne(userId, { ...item, emailAccountId: input.emailAccountId, mode: "MANUAL_APPROVAL" }).catch((error) => ({
-      leadId: item.leadId,
-      status: "FAILED",
-      errorMessage: error.message
-    }));
-    results.push(result);
-  }
-  return { results };
-}
-
-async function appendJobLog(jobId, message) {
-  const job = await prisma.emailBulkJob.findUnique({ where: { id: jobId } });
-  const logs = Array.isArray(job?.logs) ? job.logs : [];
-  logs.push({ at: new Date().toISOString(), message });
-  await prisma.emailBulkJob.update({ where: { id: jobId }, data: { logs } }).catch(() => {});
-}
-
-async function skipLead({ jobId, userId, accountId, lead, reason }) {
-  await prisma.emailSend.create({
-    data: {
-      leadId: lead.id,
-      userId,
-      emailAccountId: accountId,
-      toEmail: recipientEmail(lead),
-      subject: "",
-      body: "",
-      mode: "AUTO_SEND",
-      status: "SKIPPED",
-      errorMessage: reason
-    }
-  });
-  await prisma.lead.update({ where: { id: lead.id }, data: { emailStatus: "SKIPPED" } }).catch(() => {});
-  await prisma.emailBulkJob.update({ where: { id: jobId }, data: { skippedCount: { increment: 1 } } });
-  await appendJobLog(jobId, `Skipped ${lead.company}: ${reason}`);
-}
-
-async function processAutoJob(jobId, leadIds, userId, emailAccountId) {
-  await prisma.emailBulkJob.update({ where: { id: jobId }, data: { status: "RUNNING" } });
-  for (const leadId of leadIds) {
-    const job = await prisma.emailBulkJob.findUnique({ where: { id: jobId } });
-    if (!job || job.status === "CANCELLED") {
-      await appendJobLog(jobId, "Bulk job cancelled.");
-      return;
-    }
-    const lead = await prisma.lead.findUnique({
-      where: { id: leadId },
-      include: { issues: true, serviceOpportunities: { where: { recommended: true }, include: { service: true }, take: 1 } }
-    });
-    if (!lead) continue;
-    await prisma.emailBulkJob.update({ where: { id: jobId }, data: { currentLeadId: lead.id } });
-    const toEmail = recipientEmail(lead);
-    if (!toEmail) {
-      await skipLead({ jobId, userId, accountId: emailAccountId, lead, reason: "No recipient email" });
-      continue;
-    }
-    try {
-      const draft = (await generateEmails(userId, { leadId })).drafts[0];
-      const send = await sendOne(userId, {
-        leadId,
-        outreachDraftId: draft.id,
-        emailAccountId,
-        toEmail,
-        subject: draft.subject || `Quick idea for ${lead.company}`,
-        body: draft.fullMessage,
-        mode: "AUTO_SEND"
-      });
-      if (send.status === "SENT") {
-        await prisma.emailBulkJob.update({ where: { id: jobId }, data: { sentCount: { increment: 1 } } });
-        await appendJobLog(jobId, `Sent ${lead.company}.`);
-      } else {
-        await prisma.emailBulkJob.update({ where: { id: jobId }, data: { failedCount: { increment: 1 } } });
-        await appendJobLog(jobId, `Failed ${lead.company}: ${send.errorMessage || "Unknown error"}`);
-      }
-    } catch (error) {
-      await prisma.emailBulkJob.update({ where: { id: jobId }, data: { failedCount: { increment: 1 } } });
-      await appendJobLog(jobId, `Failed ${lead.company}: ${error.message}`);
-    }
-  }
-  await prisma.emailBulkJob.update({ where: { id: jobId }, data: { status: "COMPLETED", currentLeadId: null, completedAt: new Date() } });
+  void userId;
+  void input;
+  throw new HttpError(409, "Bulk email sending is disabled in Gmail testing mode");
 }
 
 export async function autoSend(userId, input = {}) {
-  const leadIds = Array.isArray(input.leadIds) ? input.leadIds.filter(Boolean) : [];
-  if (!leadIds.length) throw new HttpError(422, "Select at least one lead");
-  const account = input.emailAccountId
-    ? await prisma.emailAccount.findFirst({ where: { id: input.emailAccountId, userId } })
-    : await prisma.emailAccount.findFirst({ where: { userId }, orderBy: { connectedAt: "desc" } });
-  if (!account) throw new HttpError(422, "Connect Gmail or Outlook before sending");
-
-  const limit = await emailService.getDailyLimit(userId);
-  if (limit.remaining <= 0) throw new HttpError(429, `Daily email send limit reached (${limit.limit})`);
-
-  const job = await prisma.emailBulkJob.create({
-    data: {
-      userId,
-      emailAccountId: account.id,
-      mode: "AUTO_SEND",
-      totalLeads: leadIds.length,
-      status: "PENDING",
-      logs: [{ at: new Date().toISOString(), message: `Auto-send queued for ${leadIds.length} leads.` }]
-    }
-  });
-  setTimeout(() => processAutoJob(job.id, leadIds, userId, account.id).catch(async (error) => {
-    await prisma.emailBulkJob.update({ where: { id: job.id }, data: { status: "FAILED", completedAt: new Date() } }).catch(() => {});
-    await appendJobLog(job.id, `Job failed: ${error.message}`);
-  }), 0);
-  return job;
+  void userId;
+  void input;
+  throw new HttpError(409, "Automatic email sending is disabled in Gmail testing mode");
 }
 
 export async function getBulkJob(id, userId) {
-  const job = await prisma.emailBulkJob.findFirst({ where: { id, userId } });
-  if (!job) throw notFound("Email bulk job not found");
-  return job;
+  void id;
+  void userId;
+  throw new HttpError(409, "Bulk email sending is disabled in Gmail testing mode");
 }
 
 export async function cancelBulkJob(id, userId) {
-  const job = await prisma.emailBulkJob.findFirst({ where: { id, userId } });
-  if (!job) throw notFound("Email bulk job not found");
-  if (["COMPLETED", "FAILED", "CANCELLED"].includes(job.status)) return job;
-  return prisma.emailBulkJob.update({ where: { id }, data: { status: "CANCELLED", completedAt: new Date() } });
+  void id;
+  void userId;
+  throw new HttpError(409, "Bulk email sending is disabled in Gmail testing mode");
 }

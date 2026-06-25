@@ -1,11 +1,10 @@
-import { MailCheck, Plug, ShieldCheck, Trash2 } from "lucide-react";
+import { MailCheck, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Badge } from "../components/ui/Badge.jsx";
 import { Button } from "../components/ui/Button.jsx";
 import { Input } from "../components/ui/Input.jsx";
 import { useToast } from "../hooks/useToast.jsx";
 import { api } from "../services/api.js";
-import { formatDate } from "../utils/format.js";
 
 export default function EmailSettingsPage() {
   const { push } = useToast();
@@ -34,25 +33,25 @@ export default function EmailSettingsPage() {
     const connected = params.get("connected");
     const email = params.get("email");
     if (connected && email) {
-      push(`${connected} connected: ${email}`);
+      push(`Gmail connected: ${email}`);
       window.history.replaceState({}, "", "/settings/email");
     }
     load();
   }, []);
 
-  async function connect(provider) {
+  async function connectGoogle() {
     try {
-      const { data } = await api.post(`/email/connect/${provider}`);
+      const { data } = await api.post("/email/connect/google");
       window.location.href = data.authUrl;
     } catch (error) {
-      push(error.response?.data?.message || "Could not start OAuth connection", "error");
+      push(error.response?.data?.message || "Could not start Google connection", "error");
     }
   }
 
   async function disconnect(account) {
     if (!confirm(`Disconnect ${account.email}?`)) return;
     await api.post(`/email/disconnect/${account.id}`);
-    push("Email account disconnected");
+    push("Gmail disconnected");
     await load();
   }
 
@@ -67,21 +66,29 @@ export default function EmailSettingsPage() {
       <div>
         <p className="text-sm font-semibold uppercase tracking-[0.22em] text-slate-400">Connectors</p>
         <h1 className="mt-2 text-3xl font-semibold tracking-tight md:text-4xl">Email Settings</h1>
-        <p className="mt-2 max-w-2xl text-slate-500">Connect Gmail or Outlook, keep tokens encrypted on the backend, and control daily outreach volume.</p>
+        <p className="mt-2 max-w-2xl text-slate-500">Connect the private Ocia Studio Gmail sender and control manual outreach volume.</p>
+      </div>
+
+      <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900">
+        Testing mode — single sender only. Only ociastudios@gmail.com can connect or send.
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
         <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="mb-5 flex items-center gap-3">
-            <div className="grid h-11 w-11 place-items-center rounded-2xl bg-slate-950 text-white"><Plug size={19} /></div>
+            <div className="grid h-11 w-11 place-items-center rounded-2xl bg-slate-950 text-white"><MailCheck size={19} /></div>
             <div>
-              <h2 className="text-lg font-semibold">Connect email</h2>
-              <p className="text-sm text-slate-500">OAuth only. Passwords are never requested.</p>
+              <h2 className="text-lg font-semibold">Gmail connection</h2>
+              <p className="text-sm text-slate-500">Uses Google OAuth and the Gmail send-only permission.</p>
             </div>
           </div>
-          <div className="flex flex-wrap gap-3">
-            <Button onClick={() => connect("google")}>Connect Gmail</Button>
-            <Button variant="secondary" onClick={() => connect("microsoft")}>Connect Outlook</Button>
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Allowed sender</p>
+            <p className="mt-1 font-semibold">{accounts[0]?.allowedEmail || "ociastudios@gmail.com"}</p>
+            <p className="mt-2 text-sm text-slate-500">{accounts.length ? "Gmail is connected and ready for manual sends." : "Connect the allowlisted Gmail account to begin sending."}</p>
+            <Button className="mt-4" onClick={connectGoogle}>
+              <RefreshCw size={16} /> {accounts.length ? "Reconnect Gmail" : "Connect Gmail"}
+            </Button>
           </div>
         </section>
 
@@ -108,22 +115,24 @@ export default function EmailSettingsPage() {
       <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="mb-5 flex items-center justify-between gap-3">
           <div>
-            <h2 className="flex items-center gap-2 text-lg font-semibold"><MailCheck size={18} /> Connected accounts</h2>
-            <p className="mt-1 text-sm text-slate-500">Tokens are hidden from the frontend.</p>
+            <h2 className="flex items-center gap-2 text-lg font-semibold"><MailCheck size={18} /> Gmail sender status</h2>
+            <p className="mt-1 text-sm text-slate-500">OAuth tokens are encrypted and never exposed to the frontend.</p>
           </div>
-          <Badge className="bg-slate-100 text-slate-700 ring-slate-200">{accounts.length} connected</Badge>
+          <Badge className={accounts.length ? "bg-emerald-100 text-emerald-800 ring-emerald-200" : "bg-amber-100 text-amber-800 ring-amber-200"}>
+            {accounts.length ? "Connected" : "Not connected"}
+          </Badge>
         </div>
         <div className="space-y-3">
           {accounts.map((account) => (
-            <div key={account.id} className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 md:flex-row md:items-center md:justify-between">
+            <div key={account.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <div>
                 <p className="font-semibold">{account.email}</p>
-                <p className="mt-1 text-sm text-slate-500">{account.provider} · Connected {formatDate(account.connectedAt)}</p>
+                <p className="mt-1 text-sm text-slate-500">Google OAuth · Gmail API · Manual sending only</p>
               </div>
-              <Button variant="ghost" className="text-rose-600 hover:bg-rose-50" onClick={() => disconnect(account)}><Trash2 size={16} /> Disconnect</Button>
+              <Button className="mt-3 text-rose-600 hover:bg-rose-50" variant="ghost" onClick={() => disconnect(account)}><Trash2 size={16} /> Disconnect</Button>
             </div>
           ))}
-          {!accounts.length && !loading && <p className="rounded-2xl border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">No email account connected yet.</p>}
+          {!accounts.length && !loading && <p className="rounded-2xl border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">ociastudios@gmail.com is not connected yet.</p>}
         </div>
       </section>
     </div>

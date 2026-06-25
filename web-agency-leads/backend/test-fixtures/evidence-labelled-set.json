@@ -1,0 +1,452 @@
+[
+  {
+    "url": "https://www.regentlaw.com.sg",
+    "category": "legal-awards",
+    "labels": {
+      "awardsVisible": "present",
+      "trustBadgesVisible": "present",
+      "certificationsVisible": "unknown",
+      "testimonialsVisible": "unknown",
+      "reviewsVisible": "unknown",
+      "ctaVisible": "present",
+      "phoneVisible": "present",
+      "emailVisible": "present",
+      "whatsappLinkPresent": "unknown"
+    }
+  },
+  {
+    "url": "https://www.lshome.com.sg",
+    "category": "home-services-badges",
+    "labels": {
+      "awardsVisible": "unknown",
+      "trustBadgesVisible": "present",
+      "certificationsVisible": "present",
+      "testimonialsVisible": "present",
+      "reviewsVisible": "present",
+      "ctaVisible": "present",
+      "phoneVisible": "present",
+      "emailVisible": "present",
+      "whatsappLinkPresent": "present"
+    }
+  },
+  {
+    "url": "https://www.example.com",
+    "category": "plain",
+    "labels": {
+      "awardsVisible": "absent",
+      "trustBadgesVisible": "absent",
+      "certificationsVisible": "absent",
+      "testimonialsVisible": "absent",
+      "reviewsVisible": "absent",
+      "ctaVisible": "absent",
+      "phoneVisible": "absent",
+      "emailVisible": "absent",
+      "whatsappLinkPresent": "absent"
+    }
+  },
+  {
+    "url": "https://www.iana.org",
+    "category": "plain-reference",
+    "labels": {
+      "awardsVisible": "absent",
+      "trustBadgesVisible": "unknown",
+      "certificationsVisible": "unknown",
+      "testimonialsVisible": "absent",
+      "reviewsVisible": "absent",
+      "ctaVisible": "unknown",
+      "phoneVisible": "unknown",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "absent"
+    }
+  },
+  {
+    "url": "https://www.dbs.com.sg",
+    "category": "enterprise",
+    "labels": {
+      "awardsVisible": "present",
+      "trustBadgesVisible": "present",
+      "certificationsVisible": "unknown",
+      "testimonialsVisible": "unknown",
+      "reviewsVisible": "unknown",
+      "ctaVisible": "present",
+      "phoneVisible": "unknown",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "absent"
+    }
+  },
+  {
+    "url": "https://www.shopify.com",
+    "category": "saas",
+    "labels": {
+      "awardsVisible": "unknown",
+      "trustBadgesVisible": "present",
+      "certificationsVisible": "unknown",
+      "testimonialsVisible": "present",
+      "reviewsVisible": "unknown",
+      "ctaVisible": "present",
+      "phoneVisible": "absent",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "absent"
+    }
+  },
+  {
+    "url": "https://www.webflow.com",
+    "category": "saas",
+    "labels": {
+      "awardsVisible": "present",
+      "trustBadgesVisible": "present",
+      "certificationsVisible": "unknown",
+      "testimonialsVisible": "present",
+      "reviewsVisible": "unknown",
+      "ctaVisible": "present",
+      "phoneVisible": "absent",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "absent"
+    }
+  },
+  {
+    "url": "https://www.calendly.com",
+    "category": "saas-booking",
+    "labels": {
+      "awardsVisible": "unknown",
+      "trustBadgesVisible": "present",
+      "certificationsVisible": "unknown",
+      "testimonialsVisible": "present",
+      "reviewsVisible": "unknown",
+      "ctaVisible": "present",
+      "phoneVisible": "absent",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "absent"
+    }
+  },
+  {
+    "url": "https://www.intercom.com",
+    "category": "saas-chat",
+    "labels": {
+      "awardsVisible": "unknown",
+      "trustBadgesVisible": "present",
+      "certificationsVisible": "unknown",
+      "testimonialsVisible": "present",
+      "reviewsVisible": "unknown",
+      "ctaVisible": "present",
+      "phoneVisible": "absent",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "absent"
+    }
+  },
+  {
+    "url": "https://www.hubspot.com",
+    "category": "saas-marketing",
+    "labels": {
+      "awardsVisible": "present",
+      "trustBadgesVisible": "present",
+      "certificationsVisible": "unknown",
+      "testimonialsVisible": "present",
+      "reviewsVisible": "unknown",
+      "ctaVisible": "present",
+      "phoneVisible": "present",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "absent"
+    }
+  },
+  {
+    "url": "https://www.mailchimp.com",
+    "category": "saas-marketing",
+    "labels": {
+      "awardsVisible": "unknown",
+      "trustBadgesVisible": "present",
+      "certificationsVisible": "unknown",
+      "testimonialsVisible": "present",
+      "reviewsVisible": "unknown",
+      "ctaVisible": "present",
+      "phoneVisible": "absent",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "absent"
+    }
+  },
+  {
+    "url": "https://www.zendesk.com",
+    "category": "saas-support",
+    "labels": {
+      "awardsVisible": "unknown",
+      "trustBadgesVisible": "present",
+      "certificationsVisible": "unknown",
+      "testimonialsVisible": "present",
+      "reviewsVisible": "unknown",
+      "ctaVisible": "present",
+      "phoneVisible": "present",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "absent"
+    }
+  },
+  {
+    "url": "https://www.nike.com",
+    "category": "retail-enterprise",
+    "labels": {
+      "awardsVisible": "unknown",
+      "trustBadgesVisible": "unknown",
+      "certificationsVisible": "unknown",
+      "testimonialsVisible": "absent",
+      "reviewsVisible": "unknown",
+      "ctaVisible": "present",
+      "phoneVisible": "unknown",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "absent"
+    }
+  },
+  {
+    "url": "https://www.apple.com",
+    "category": "enterprise",
+    "labels": {
+      "awardsVisible": "unknown",
+      "trustBadgesVisible": "unknown",
+      "certificationsVisible": "unknown",
+      "testimonialsVisible": "absent",
+      "reviewsVisible": "unknown",
+      "ctaVisible": "present",
+      "phoneVisible": "unknown",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "absent"
+    }
+  },
+  {
+    "url": "https://www.microsoft.com",
+    "category": "enterprise",
+    "labels": {
+      "awardsVisible": "present",
+      "trustBadgesVisible": "present",
+      "certificationsVisible": "present",
+      "testimonialsVisible": "present",
+      "reviewsVisible": "unknown",
+      "ctaVisible": "present",
+      "phoneVisible": "unknown",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "absent"
+    }
+  },
+  {
+    "url": "https://www.squarespace.com",
+    "category": "saas-builder",
+    "labels": {
+      "awardsVisible": "present",
+      "trustBadgesVisible": "unknown",
+      "certificationsVisible": "unknown",
+      "testimonialsVisible": "present",
+      "reviewsVisible": "unknown",
+      "ctaVisible": "present",
+      "phoneVisible": "absent",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "absent"
+    }
+  },
+  {
+    "url": "https://www.wix.com",
+    "category": "saas-builder",
+    "labels": {
+      "awardsVisible": "unknown",
+      "trustBadgesVisible": "present",
+      "certificationsVisible": "unknown",
+      "testimonialsVisible": "present",
+      "reviewsVisible": "unknown",
+      "ctaVisible": "present",
+      "phoneVisible": "absent",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "absent"
+    }
+  },
+  {
+    "url": "https://www.airbnb.com",
+    "category": "marketplace",
+    "labels": {
+      "awardsVisible": "unknown",
+      "trustBadgesVisible": "present",
+      "certificationsVisible": "unknown",
+      "testimonialsVisible": "unknown",
+      "reviewsVisible": "present",
+      "ctaVisible": "present",
+      "phoneVisible": "unknown",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "absent"
+    }
+  },
+  {
+    "url": "https://www.booking.com",
+    "category": "travel-booking",
+    "labels": {
+      "awardsVisible": "unknown",
+      "trustBadgesVisible": "present",
+      "certificationsVisible": "unknown",
+      "testimonialsVisible": "unknown",
+      "reviewsVisible": "present",
+      "ctaVisible": "present",
+      "phoneVisible": "unknown",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "absent"
+    }
+  },
+  {
+    "url": "https://www.yelp.com",
+    "category": "reviews",
+    "labels": {
+      "awardsVisible": "unknown",
+      "trustBadgesVisible": "unknown",
+      "certificationsVisible": "unknown",
+      "testimonialsVisible": "unknown",
+      "reviewsVisible": "present",
+      "ctaVisible": "present",
+      "phoneVisible": "unknown",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "absent"
+    }
+  },
+  {
+    "url": "https://www.tripadvisor.com",
+    "category": "reviews-travel",
+    "labels": {
+      "awardsVisible": "present",
+      "trustBadgesVisible": "unknown",
+      "certificationsVisible": "unknown",
+      "testimonialsVisible": "unknown",
+      "reviewsVisible": "present",
+      "ctaVisible": "present",
+      "phoneVisible": "unknown",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "absent"
+    }
+  },
+  {
+    "url": "https://www.healthhub.sg",
+    "category": "health-government",
+    "labels": {
+      "awardsVisible": "unknown",
+      "trustBadgesVisible": "present",
+      "certificationsVisible": "unknown",
+      "testimonialsVisible": "absent",
+      "reviewsVisible": "unknown",
+      "ctaVisible": "present",
+      "phoneVisible": "present",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "unknown"
+    }
+  },
+  {
+    "url": "https://www.rafflesmedicalgroup.com",
+    "category": "medical",
+    "labels": {
+      "awardsVisible": "present",
+      "trustBadgesVisible": "present",
+      "certificationsVisible": "present",
+      "testimonialsVisible": "unknown",
+      "reviewsVisible": "unknown",
+      "ctaVisible": "present",
+      "phoneVisible": "present",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "present"
+    }
+  },
+  {
+    "url": "https://www.qandm.com.sg",
+    "category": "dental",
+    "labels": {
+      "awardsVisible": "unknown",
+      "trustBadgesVisible": "present",
+      "certificationsVisible": "present",
+      "testimonialsVisible": "present",
+      "reviewsVisible": "present",
+      "ctaVisible": "present",
+      "phoneVisible": "present",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "present"
+    }
+  },
+  {
+    "url": "https://www.psc.com.sg",
+    "category": "medical-aesthetics",
+    "labels": {
+      "awardsVisible": "present",
+      "trustBadgesVisible": "present",
+      "certificationsVisible": "present",
+      "testimonialsVisible": "present",
+      "reviewsVisible": "unknown",
+      "ctaVisible": "present",
+      "phoneVisible": "present",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "present"
+    }
+  },
+  {
+    "url": "https://www.jumbo.com.sg",
+    "category": "restaurant",
+    "labels": {
+      "awardsVisible": "present",
+      "trustBadgesVisible": "unknown",
+      "certificationsVisible": "unknown",
+      "testimonialsVisible": "unknown",
+      "reviewsVisible": "present",
+      "ctaVisible": "present",
+      "phoneVisible": "present",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "unknown"
+    }
+  },
+  {
+    "url": "https://www.haidilao.com",
+    "category": "restaurant",
+    "labels": {
+      "awardsVisible": "unknown",
+      "trustBadgesVisible": "unknown",
+      "certificationsVisible": "unknown",
+      "testimonialsVisible": "unknown",
+      "reviewsVisible": "unknown",
+      "ctaVisible": "present",
+      "phoneVisible": "unknown",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "absent"
+    }
+  },
+  {
+    "url": "https://www.ikea.com/sg/en",
+    "category": "retail-home",
+    "labels": {
+      "awardsVisible": "unknown",
+      "trustBadgesVisible": "present",
+      "certificationsVisible": "present",
+      "testimonialsVisible": "unknown",
+      "reviewsVisible": "present",
+      "ctaVisible": "present",
+      "phoneVisible": "unknown",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "absent"
+    }
+  },
+  {
+    "url": "https://www.castlery.com/sg",
+    "category": "interior-retail",
+    "labels": {
+      "awardsVisible": "present",
+      "trustBadgesVisible": "present",
+      "certificationsVisible": "unknown",
+      "testimonialsVisible": "present",
+      "reviewsVisible": "present",
+      "ctaVisible": "present",
+      "phoneVisible": "unknown",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "absent"
+    }
+  },
+  {
+    "url": "https://www.houzz.com.sg",
+    "category": "interior-marketplace",
+    "labels": {
+      "awardsVisible": "present",
+      "trustBadgesVisible": "present",
+      "certificationsVisible": "unknown",
+      "testimonialsVisible": "present",
+      "reviewsVisible": "present",
+      "ctaVisible": "present",
+      "phoneVisible": "unknown",
+      "emailVisible": "unknown",
+      "whatsappLinkPresent": "absent"
+    }
+  }
+]

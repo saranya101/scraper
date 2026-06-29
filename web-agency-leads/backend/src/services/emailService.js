@@ -224,16 +224,125 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-function makeGmailMessage({ from, toEmail, subject, body }) {
+function emailPrefix(email = "") {
+  return String(email || "").split("@")[0] || "";
+}
+
+function escapeRegex(value = "") {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function cleanAwkwardCompanyPhrases(text = "", company = "") {
+  let next = String(text || "");
+  const name = String(company || "").trim();
+  if (!name) return next;
+  const escaped = escapeRegex(name);
+  if (/^the\s+/i.test(name)) {
+    next = next.replace(new RegExp(`\\bthe\\s+${escaped}\\b`, "gi"), name);
+  }
+  next = next.replace(new RegExp(`\\b(the\\s+){2,}${escaped}\\b`, "gi"), `the ${name}`);
+  next = next.replace(new RegExp(`\\bin\\s+the\\s+${escaped}\\s+(space|industry|market)\\b`, "gi"), "");
+  return next;
+}
+
+function normalizeWhitespace(body = "") {
+  return String(body || "")
+    .replace(/\r/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .join("\n")
+    .trim();
+}
+
+function senderFromInput(input = {}, user = {}, account = {}) {
+  const email = input.fromEmail || user.senderEmail || account.email || user.email || "";
+  const inputName = String(input.fromName || "").trim();
+  const profileName = String(user.senderName || user.name || "").trim();
+  const looksLikeEmailPrefix = inputName && emailPrefix(email) && inputName.toLowerCase() === emailPrefix(email).toLowerCase();
+  return {
+    name: String((looksLikeEmailPrefix ? profileName : inputName) || profileName || emailPrefix(email) || "").trim(),
+    email: String(email || "").trim(),
+    title: String(input.senderTitle || user.senderTitle || "").trim(),
+    company: String(input.senderCompany || user.companyName || "").trim()
+  };
+}
+
+function contactFirstName(input = {}, lead = {}) {
+  return String(input.contactFirstName || lead.contactFirstName || lead.ownerName?.split?.(/\s+/)?.[0] || "").trim() || "there";
+}
+
+function signatureBlock(sender) {
+  return ["Thanks,", sender.name, sender.title, sender.company].filter(Boolean).join("\n");
+}
+
+function normalizeSendBody({ body, lead, input, user, account }) {
+  const sender = senderFromInput(input, user, account);
+  const company = input.companyName || lead.company || "";
+  let next = cleanAwkwardCompanyPhrases(normalizeWhitespace(body), company);
+  next = next
+    .replace(/^(Hi [^\n,]+,)\s+/i, "$1\n\n")
+    .replace(/^(Hello [^\n,]+,)\s+/i, "$1\n\n")
+    .replace(/\s+(Thanks,)/i, "\n\n$1");
+
+  if (!/^(hi|hello)\s+/i.test(next)) {
+    next = `Hi ${contactFirstName(input, lead)},\n\n${next}`;
+  }
+
+  const signature = signatureBlock(sender);
+  if (signature) {
+    const thanksPattern = /(?:\n\s*)?thanks,?[\s\S]*$/i;
+    if (thanksPattern.test(next)) {
+      next = next.replace(thanksPattern, `\n\n${signature}`);
+    } else {
+      next = `${next}\n\n${signature}`;
+    }
+  }
+
+  return normalizeWhitespace(cleanAwkwardCompanyPhrases(next, company));
+}
+
+function textToEmailHtml(body = "") {
+  const paragraphs = normalizeWhitespace(body)
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+  return [
+    '<div style="font-family: Arial, sans-serif; font-size: 14px; line-height: 1.5; color: #111827;">',
+    ...paragraphs.map((paragraph) => {
+      const html = paragraph
+        .split("\n")
+        .map((line) => escapeHtml(line))
+        .join("<br>");
+      return `<p style="font-family: Arial, sans-serif; font-size: 14px; line-height: 1.5; margin: 0 0 14px 0;">${html}</p>`;
+    }),
+    "</div>"
+  ].join("");
+}
+
+function makeGmailMessage({ from, toEmail, subject, text, html }) {
+  const boundary = `ocia_${crypto.randomBytes(12).toString("hex")}`;
   const message = [
     `From: ${from}`,
     `To: ${toEmail}`,
     `Subject: ${subject}`,
     "MIME-Version: 1.0",
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    "",
+    `--${boundary}`,
     "Content-Type: text/plain; charset=utf-8",
     "Content-Transfer-Encoding: 8bit",
     "",
-    body
+    text,
+    "",
+    `--${boundary}`,
+    "Content-Type: text/html; charset=utf-8",
+    "Content-Transfer-Encoding: 8bit",
+    "",
+    html,
+    "",
+    `--${boundary}--`
   ].join("\r\n");
   return Buffer.from(message).toString("base64url");
 }
@@ -270,17 +379,18 @@ async function gmailAccount() {
 }
 
 async function providerSend({ account, toEmail, subject, body }) {
+  const text = normalizeWhitespace(body);
+  const html = textToEmailHtml(text);
   if (activeProvider() === "GMAIL") {
     const cfg = config("GOOGLE");
     await axios.post(
       cfg.sendUrl,
-      { raw: makeGmailMessage({ from: account.email, toEmail, subject, body }) },
+      { raw: makeGmailMessage({ from: account.email, toEmail, subject, text, html }) },
       { headers: { Authorization: `Bearer ${await accessToken(account)}` }, timeout: 30000 }
     );
     return { provider: "GMAIL", senderEmail: account.email };
   }
-  const html = `<div style="font-family:Inter,Arial,sans-serif;font-size:15px;line-height:1.65;color:#18181b;white-space:pre-wrap">${escapeHtml(body)}</div>`;
-  await resendService.sendEmail({ to: toEmail, subject, html, text: body });
+  await resendService.sendEmail({ to: toEmail, subject, html, text });
   return { provider: "RESEND", senderEmail: resendService.senderDetails().email };
 }
 
@@ -288,17 +398,19 @@ export async function sendEmail(userId, input = {}) {
   const leadId = input.leadId;
   const toEmail = String(input.toEmail || "").trim();
   const subject = String(input.subject || "").trim();
-  const body = String(input.body || "").trim();
+  const rawBody = String(input.body || "").trim();
   if (!leadId) throw new HttpError(422, "Lead is required");
   if (!toEmail) throw new HttpError(422, "Recipient email is required");
   if (!subject) throw new HttpError(422, "Subject is required");
-  if (!body) throw new HttpError(422, "Email body is required");
+  if (!rawBody) throw new HttpError(422, "Email body is required");
 
-  const [lead, draft] = await Promise.all([
+  const [lead, draft, user] = await Promise.all([
     prisma.lead.findUnique({ where: { id: leadId } }),
-    input.outreachDraftId ? prisma.outreachDraft.findUnique({ where: { id: input.outreachDraftId } }) : null
+    input.outreachDraftId ? prisma.outreachDraft.findUnique({ where: { id: input.outreachDraftId } }) : null,
+    prisma.user.findUnique({ where: { id: userId } })
   ]);
   if (!lead) throw notFound("Lead not found");
+  if (!user) throw notFound("User not found");
   if (input.outreachDraftId && (!draft || draft.leadId !== leadId)) throw notFound("Outreach draft not found");
   const cooldown = await cooldownDays();
   if (!input.ignoreCooldown && lead.lastEmailSentAt && Date.now() - lead.lastEmailSentAt.getTime() < cooldown * 24 * 60 * 60 * 1000) {
@@ -310,6 +422,7 @@ export async function sendEmail(userId, input = {}) {
   const provider = activeProvider();
   if (!["GMAIL", "RESEND"].includes(provider)) throw new HttpError(500, `Unsupported EMAIL_PROVIDER: ${provider}`);
   const account = provider === "GMAIL" ? await gmailAccount() : null;
+  const body = normalizeSendBody({ body: rawBody, lead, input, user, account: account || {} });
   const sendRecord = await prisma.emailSend.create({
     data: {
       leadId,

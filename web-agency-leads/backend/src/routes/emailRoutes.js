@@ -12,14 +12,26 @@ const sendBody = z.object({
   outreachDraftId: z.string().optional().nullable(),
   toEmail: z.string().email(),
   subject: z.string().min(1),
-  body: z.string().min(1)
+  body: z.string().min(1),
+  fromName: z.string().optional(),
+  fromEmail: z.string().optional(),
+  senderTitle: z.string().optional(),
+  senderCompany: z.string().optional(),
+  contactFirstName: z.string().optional(),
+  companyName: z.string().optional()
 });
 
 const resendTestBody = z.object({
   leadId: z.string().min(1),
   toEmail: z.string().email(),
   subject: z.string().optional(),
-  body: z.string().optional()
+  body: z.string().optional(),
+  fromName: z.string().optional(),
+  fromEmail: z.string().optional(),
+  senderTitle: z.string().optional(),
+  senderCompany: z.string().optional(),
+  contactFirstName: z.string().optional(),
+  companyName: z.string().optional()
 });
 
 router.get("/callback/google", asyncHandler(emailController.callback));

@@ -24,6 +24,7 @@ export async function send(req, res) {
 
 export async function test(req, res) {
   res.status(201).json(await emailService.sendEmail(req.user.id, {
+    ...req.body,
     leadId: req.body.leadId,
     toEmail: req.body.toEmail,
     subject: req.body.subject || "Ocia Studio Gmail API test",

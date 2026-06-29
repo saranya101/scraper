@@ -122,6 +122,30 @@ function renderTemplate(template = "", context = {}) {
   }).replace(/[ \t]+\n/g, "\n").trim();
 }
 
+function cleanAwkwardCompanyPhrases(text = "", company = "") {
+  let next = String(text || "");
+  const name = String(company || "").trim();
+  if (name) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (/^the\s+/i.test(name)) {
+      next = next.replace(new RegExp(`\\bthe\\s+${escaped}\\b`, "gi"), name);
+    }
+    next = next.replace(new RegExp(`\\b(the\\s+){2,}${escaped}\\b`, "gi"), `the ${name}`);
+  }
+  return next;
+}
+
+function normalizeEmailBody(body = "", company = "") {
+  return cleanAwkwardCompanyPhrases(body, company)
+    .replace(/\r/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .join("\n")
+    .trim();
+}
+
 function assembleEmail({ draft, sender, lead, template, observation }) {
   const context = {
     contact: { firstName: firstName(lead), name: lead?.ownerName || "" },
@@ -131,7 +155,7 @@ function assembleEmail({ draft, sender, lead, template, observation }) {
     observation: { category: observation?.category || "" }
   };
   const activeTemplate = { ...defaultTemplate, ...(template || {}) };
-  return [
+  const body = [
     renderTemplate(activeTemplate.greetingTemplate, context),
     renderTemplate(activeTemplate.openingLineTemplate, context),
     String(draft.body || "").trim(),
@@ -139,6 +163,7 @@ function assembleEmail({ draft, sender, lead, template, observation }) {
     renderTemplate(activeTemplate.signOffTemplate, context),
     renderTemplate(activeTemplate.signatureTemplate, context)
   ].map((part) => String(part || "").trim()).filter(Boolean).join("\n\n");
+  return normalizeEmailBody(body, lead?.company || "");
 }
 
 export default function OutreachPage() {
@@ -388,7 +413,13 @@ export default function OutreachPage() {
         leadId: selectedLead.id,
         toEmail: draft.toEmail,
         subject: draft.subject,
-        body: finalBody
+        body: finalBody,
+        fromName: draft.fromName,
+        fromEmail: draft.fromEmail,
+        senderTitle: activeSender.title,
+        senderCompany: activeSender.company,
+        contactFirstName: firstName(selectedLead),
+        companyName: selectedLead.company
       });
       if (data.status === "SENT") {
         push("Email sent");
@@ -417,6 +448,10 @@ export default function OutreachPage() {
         leadId: selectedLead.id,
         fromName: draft.fromName,
         fromEmail: draft.fromEmail,
+        senderTitle: activeSender.title,
+        senderCompany: activeSender.company,
+        contactFirstName: firstName(selectedLead),
+        companyName: selectedLead.company,
         toEmail: testEmail,
         subject: draft.subject,
         body: finalBody

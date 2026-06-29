@@ -5,6 +5,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { Badge } from "../components/ui/Badge.jsx";
 import { Button } from "../components/ui/Button.jsx";
 import { Input, Select, Textarea } from "../components/ui/Input.jsx";
+import ScreenshotPreview from "../components/ScreenshotPreview.jsx";
 import { useToast } from "../hooks/useToast.jsx";
 import { api } from "../services/api.js";
 import { domain, formatDate, priorities, websiteStatuses } from "../utils/format.js";
@@ -560,8 +561,8 @@ export default function ScannerPage() {
                 </div>
                 {(result.screenshotPath || result.mobileScreenshotPath) && (
                   <div className="mt-4 grid gap-3 md:grid-cols-[1fr_160px]">
-                    {result.screenshotPath && <img src={result.screenshotPath} alt={`${result.company} desktop screenshot`} className="h-40 w-full rounded-2xl border border-slate-200 object-cover" />}
-                    {result.mobileScreenshotPath && <img src={result.mobileScreenshotPath} alt={`${result.company} mobile screenshot`} className="h-40 w-full rounded-2xl border border-slate-200 object-cover" />}
+                    {result.screenshotPath && <ScreenshotPreview src={result.screenshotPath} alt={`${result.company} desktop screenshot`} variant="compact" className="rounded-2xl border border-slate-200" />}
+                    {result.mobileScreenshotPath && <ScreenshotPreview src={result.mobileScreenshotPath} alt={`${result.company} mobile screenshot`} variant="compact" className="rounded-2xl border border-slate-200" imageClassName="object-contain" />}
                   </div>
                 )}
                 <div className="mt-4 grid gap-3 md:grid-cols-[120px_120px_1fr]">

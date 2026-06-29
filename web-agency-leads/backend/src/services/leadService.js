@@ -459,6 +459,14 @@ export async function bulkDelete(input) {
   return { deleted: result.count };
 }
 
+export async function deleteAllLeads(input = {}) {
+  if (input.confirmation !== "DELETE ALL LEADS") {
+    throw new HttpError(422, "Type DELETE ALL LEADS to confirm");
+  }
+  const result = await prisma.lead.deleteMany({});
+  return { deleted: result.count };
+}
+
 export async function deleteLead(id) {
   await getLead(id);
   await prisma.lead.delete({ where: { id } });

@@ -6,7 +6,6 @@ import AutomationPage from "./pages/AutomationPage.jsx";
 import CrmPage from "./pages/CrmPage.jsx";
 import DashboardPage from "./pages/DashboardPage.jsx";
 import EmailSettingsPage from "./pages/EmailSettingsPage.jsx";
-import EmailsPage from "./pages/EmailsPage.jsx";
 import ImportPage from "./pages/ImportPage.jsx";
 import LeadDetailPage from "./pages/LeadDetailPage.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
@@ -40,7 +39,7 @@ export default function App() {
         <Route path="analytics" element={<AnalyticsPage />} />
         <Route path="automation" element={<AutomationPage />} />
         <Route path="outreach" element={<OutreachPage />} />
-        <Route path="emails" element={<EmailsPage />} />
+        <Route path="emails" element={<Navigate to="/outreach" replace />} />
         <Route path="scanner" element={<ScannerPage />} />
         <Route path="workspaces" element={<WorkspacesPage />} />
         <Route path="workspaces/:industrySlug" element={<WorkspaceDetailPage />} />

@@ -1,7 +1,8 @@
-import { ArrowLeft, ArrowUpRight, Clipboard, Cpu, DollarSign, Eye, GitCompare, Globe2, History, Mail, MailCheck, MailPlus, MapPin, MessageCircle, Pencil, Phone, Plus, Search, ShieldCheck, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, Clipboard, Cpu, DollarSign, GitCompare, Globe2, History, Mail, MailCheck, MailPlus, MapPin, MessageCircle, Pencil, Phone, Plus, Search, ShieldCheck, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import LeadFormModal from "../components/LeadFormModal.jsx";
+import ScreenshotPreview from "../components/ScreenshotPreview.jsx";
 import { Badge } from "../components/ui/Badge.jsx";
 import { Button } from "../components/ui/Button.jsx";
 import { Input, Select, Textarea } from "../components/ui/Input.jsx";
@@ -340,8 +341,8 @@ export default function LeadDetailPage() {
           </a>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Link to={`/emails?leadId=${lead.id}`} className="inline-flex items-center justify-center gap-2 rounded-lg bg-white px-3.5 py-2 text-sm font-semibold text-slate-900 ring-1 ring-slate-200 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
-            <Mail size={16} /> Open in Emails
+          <Link to={`/outreach?leadId=${lead.id}`} className="inline-flex items-center justify-center gap-2 rounded-lg bg-white px-3.5 py-2 text-sm font-semibold text-slate-900 ring-1 ring-slate-200 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
+            <Mail size={16} /> Open in Outreach Pipeline
           </Link>
           <Button variant="secondary" onClick={() => setModalOpen(true)}><Pencil size={16} /> Edit</Button>
           <Button variant="danger" onClick={removeLead}><Trash2 size={16} /> Delete</Button>
@@ -349,13 +350,18 @@ export default function LeadDetailPage() {
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.25fr_0.75fr]">
-        <section className="space-y-6">
-          <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-            <div className="aspect-[16/9] bg-[linear-gradient(135deg,#f8fafc,#e2e8f0)]">
+        <section className="min-w-0 space-y-6">
+          <div className="min-w-0 max-w-full overflow-hidden rounded-3xl border border-slate-200 bg-white p-3 shadow-sm">
+            <div className="min-w-0 max-w-full bg-[linear-gradient(135deg,#f8fafc,#e2e8f0)]">
               {lead.screenshotPath ? (
-                <img src={lead.screenshotPath} alt={`${lead.company} website screenshot`} className="h-full w-full object-cover" />
+                <ScreenshotPreview
+                  src={lead.screenshotPath}
+                  alt={`${lead.company} website screenshot`}
+                  variant="scroll"
+                  className="rounded-2xl"
+                />
               ) : (
-                <div className="grid h-full place-items-center p-8 text-center">
+                <div className="grid min-h-64 place-items-center p-8 text-center">
                   <div>
                     <p className="text-sm font-semibold uppercase tracking-[0.22em] text-slate-400">Screenshot preview</p>
                     <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-800">Add a website screenshot path when audits are generated.</p>
@@ -379,9 +385,9 @@ export default function LeadDetailPage() {
             </div>
             <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white p-3 shadow-sm">
               <p className="mb-2 text-sm font-semibold">Mobile screenshot</p>
-              <div className="aspect-[9/16] overflow-hidden rounded-2xl bg-slate-100">
-                {lead.mobileScreenshotPath ? <img src={lead.mobileScreenshotPath} alt={`${lead.company} mobile screenshot`} className="h-full w-full object-cover" /> : <div className="grid h-full place-items-center px-4 text-center text-sm text-slate-400">No mobile screenshot</div>}
-              </div>
+              {lead.mobileScreenshotPath
+                ? <ScreenshotPreview src={lead.mobileScreenshotPath} alt={`${lead.company} mobile screenshot`} variant="contain" className="rounded-2xl" />
+                : <div className="grid h-[320px] place-items-center rounded-2xl bg-slate-100 px-4 text-center text-sm text-slate-400 sm:h-[420px]">No mobile screenshot</div>}
             </div>
           </div>
 
@@ -492,9 +498,14 @@ export default function LeadDetailPage() {
             </div>
 
             {evidencePayload.fullPageScreenshotPath && (
-              <button type="button" onClick={() => window.open(evidencePayload.fullPageScreenshotPath, "_blank", "noopener,noreferrer")} className="mb-4 inline-flex items-center gap-2 rounded-xl bg-slate-950 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800">
-                <Eye size={15} /> View full-page evidence screenshot
-              </button>
+              <div className="mb-5">
+                <p className="mb-2 text-sm font-semibold">Full-page evidence screenshot</p>
+                <ScreenshotPreview
+                  src={evidencePayload.fullPageScreenshotPath}
+                  alt={`${lead.company} full-page evidence screenshot`}
+                  variant="scroll"
+                />
+              </div>
             )}
 
             {orderedEvidence.length ? (
@@ -504,7 +515,7 @@ export default function LeadDetailPage() {
                   const draft = correctionDrafts[signal.key] || {};
                   const effectiveValue = correction?.value || signal.value;
                   return (
-                    <div key={signal.key} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <div key={signal.key} className="min-w-0 max-w-full overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-4">
                       <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                         <div>
                           <div className="flex flex-wrap items-center gap-2">
@@ -520,13 +531,13 @@ export default function LeadDetailPage() {
                           {signal.scrollDepth != null && <Badge className="bg-white text-slate-700 ring-slate-200">{Math.round(signal.scrollDepth * 100)}% depth</Badge>}
                         </div>
                       </div>
-                      <div className="grid gap-3 md:grid-cols-[1fr_220px]">
-                        <div className="space-y-2 text-sm text-slate-600">
-                          {signal.textRead && <p className="rounded-xl bg-white px-3 py-2"><span className="font-semibold text-slate-900">Text read:</span> {signal.textRead}</p>}
+                      <div className="grid min-w-0 gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
+                        <div className="min-w-0 space-y-2 text-sm text-slate-600">
+                          {signal.textRead && <p className="max-w-full break-words rounded-xl bg-white px-3 py-2 [overflow-wrap:anywhere]"><span className="font-semibold text-slate-900">Text read:</span> {signal.textRead}</p>}
                           {signal.region && <p className="rounded-xl bg-white px-3 py-2"><span className="font-semibold text-slate-900">Screenshot region:</span> [{signal.region.join(", ")}]</p>}
                           <p className="rounded-xl bg-white px-3 py-2"><span className="font-semibold text-slate-900">Detector:</span> {signal.detectorVersion}</p>
                         </div>
-                        <div className="space-y-2">
+                        <div className="min-w-0 space-y-2">
                           <Select value={draft.value ?? correction?.value ?? ""} onChange={(event) => setCorrectionDrafts({ ...correctionDrafts, [signal.key]: { ...draft, value: event.target.value } })}>
                             <option value="">Manual correction</option>
                             <option value="present">Present</option>
@@ -574,7 +585,7 @@ export default function LeadDetailPage() {
 
         </section>
 
-        <aside className="space-y-6">
+        <aside className="min-w-0 space-y-6">
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="mb-4 flex items-center justify-between gap-3">
               <h2 className="flex items-center gap-2 text-lg font-semibold"><MessageCircle size={18} /> Contact details</h2>
@@ -731,9 +742,14 @@ export default function LeadDetailPage() {
             </div>
             {competitorData.competitors.map((competitor) => (
               <div key={competitor.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                <div className="aspect-[16/10] bg-slate-100">
+                <div className="bg-slate-100">
                   {competitor.screenshotPath ? (
-                    <img src={competitor.screenshotPath} alt={`${competitor.company} website screenshot`} className="h-full w-full object-cover" />
+                    <ScreenshotPreview
+                      src={competitor.screenshotPath}
+                      alt={`${competitor.company} website screenshot`}
+                      variant="card"
+                      className="rounded-none"
+                    />
                   ) : (
                     <div className="grid h-full place-items-center px-4 text-center text-xs text-slate-400">Audit to capture screenshot</div>
                   )}

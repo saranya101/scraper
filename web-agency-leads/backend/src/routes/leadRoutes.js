@@ -135,6 +135,20 @@ router.delete(
   }),
   asyncHandler(leadController.bulkDelete)
 );
+router.delete(
+  "/all",
+  validate({
+    parse: (value) =>
+      z
+        .object({
+          body: z.object({
+            confirmation: z.string()
+          })
+        })
+        .parse(value)
+  }),
+  asyncHandler(leadController.deleteAll)
+);
 router.post("/reprocess-opportunities", asyncHandler(leadController.reprocessAllOpportunities));
 router.get("/:id", asyncHandler(leadController.get));
 router.post("/:id/reprocess-opportunities", asyncHandler(leadController.reprocessOpportunities));

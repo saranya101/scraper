@@ -3,8 +3,6 @@ import { HttpError } from "../utils/httpError.js";
 import * as emailService from "./emailService.js";
 import * as outreachService from "./outreachService.js";
 
-const footer = "\n\n--\nIf this is not relevant, feel free to ignore this note.";
-
 function recipientEmail(lead) {
   return lead.ownerEmail || lead.generalEmail || "";
 }
@@ -87,7 +85,7 @@ export async function listQualifiedLeads(query = {}) {
 }
 
 function bodyWithFooter(body) {
-  return String(body || "").includes("If this is not relevant") ? body : `${body}${footer}`;
+  return String(body || "").trim();
 }
 
 export async function generateEmails(userId, input = {}) {

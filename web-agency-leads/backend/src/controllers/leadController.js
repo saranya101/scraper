@@ -44,6 +44,11 @@ export async function bulkDelete(req, res) {
   res.json(await leadService.bulkDelete(req.body));
 }
 
+export async function deleteAll(req, res) {
+  if (req.user?.role !== "ADMIN") return res.status(403).json({ message: "Admin access required" });
+  res.json(await leadService.deleteAllLeads(req.body));
+}
+
 export async function remove(req, res) {
   await leadService.deleteLead(req.params.id);
   res.status(204).send();

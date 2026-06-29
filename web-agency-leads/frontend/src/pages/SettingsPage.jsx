@@ -1,4 +1,4 @@
-import { Bell, BriefcaseBusiness, DollarSign, KeyRound, Moon, Plus, Save, SlidersHorizontal, Trash2, UsersRound } from "lucide-react";
+import { Bell, BrainCircuit, BriefcaseBusiness, DollarSign, KeyRound, Moon, Plus, Save, SlidersHorizontal, Trash2, UsersRound } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Badge } from "../components/ui/Badge.jsx";
 import { Button } from "../components/ui/Button.jsx";
@@ -29,6 +29,33 @@ const blankService = {
   enabled: true
 };
 
+const blankKnowledgeForm = {
+  businessType: "",
+  industry: "",
+  country: "",
+  targetMarket: ""
+};
+
+const defaultOutreachEmailTemplate = {
+  greetingTemplate: 'Hi {{contact.firstName || "there"}},',
+  openingLineTemplate: "",
+  closingQuestionTemplate: "",
+  signOffTemplate: "Thanks,",
+  signatureTemplate: "{{sender.name}}\n{{sender.title}}\n{{sender.company}}"
+};
+
+const outreachTemplateVariables = [
+  "{{contact.firstName}}",
+  "{{contact.name}}",
+  "{{company.name}}",
+  "{{company.website}}",
+  "{{sender.name}}",
+  "{{sender.title}}",
+  "{{sender.company}}",
+  "{{industry}}",
+  "{{observation.category}}"
+];
+
 const scoringFields = [
   ["designWeight", "Design"],
   ["mobileWeight", "Mobile"],
@@ -55,14 +82,14 @@ function money(value) {
 
 function Section({ icon: Icon, title, description, children }) {
   return (
-    <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+    <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
       <div className="mb-5 flex items-start gap-3">
-        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-slate-950 text-white">
+        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-slate-950 text-white dark:bg-white dark:text-slate-950">
           <Icon size={18} />
         </div>
         <div>
           <h2 className="text-lg font-semibold">{title}</h2>
-          {description && <p className="mt-1 text-sm text-slate-500">{description}</p>}
+          {description && <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{description}</p>}
         </div>
       </div>
       {children}
@@ -73,7 +100,7 @@ function Section({ icon: Icon, title, description, children }) {
 function Field({ label, children }) {
   return (
     <label>
-      <span className="mb-1.5 block text-sm font-medium">{label}</span>
+      <span className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-200">{label}</span>
       {children}
     </label>
   );
@@ -88,6 +115,13 @@ export default function SettingsPage() {
   const [costTracking, setCostTracking] = useState({});
   const [darkMode, setDarkMode] = useState({ defaultTheme: "system" });
   const [notifications, setNotifications] = useState({});
+  const [outreachPersona, setOutreachPersona] = useState({ enabled: false, assistantName: "", assistantTitle: "", assistantEmail: "", assistantAvatar: "", companyName: "Ocia Studio" });
+  const [outreachPipeline, setOutreachPipeline] = useState({ minimumConfidence: 0.6, autoRewrite: true, maximumRewriteAttempts: 1, showDebug: false, qualityGateStrictness: "standard" });
+  const [outreachEmailTemplate, setOutreachEmailTemplate] = useState(defaultOutreachEmailTemplate);
+  const [knowledgeForm, setKnowledgeForm] = useState(blankKnowledgeForm);
+  const [knowledgeModels, setKnowledgeModels] = useState([]);
+  const [knowledgePreview, setKnowledgePreview] = useState(null);
+  const [generatingKnowledge, setGeneratingKnowledge] = useState(false);
   const [selectedIndustryId, setSelectedIndustryId] = useState("");
   const [industryForm, setIndustryForm] = useState(blankIndustry);
   const [selectedServiceId, setSelectedServiceId] = useState("");
@@ -98,12 +132,26 @@ export default function SettingsPage() {
     setLoading(true);
     try {
       const { data } = await api.get("/settings");
+      const knowledgeRes = await api.get("/outreach/knowledge").catch(() => ({ data: [] }));
       setSettings(data);
-      setProfile({ name: data.profile?.name || user?.name || "", email: data.profile?.email || user?.email || "" });
+      setKnowledgeModels(knowledgeRes.data || []);
+      setProfile({
+        name: data.profile?.name || user?.name || "",
+        email: data.profile?.email || user?.email || "",
+        senderName: data.profile?.senderName || "",
+        senderTitle: data.profile?.senderTitle || "",
+        senderEmail: data.profile?.senderEmail || "",
+        companyName: data.profile?.companyName || "Ocia Studio",
+        signature: data.profile?.signature || "",
+        profilePhoto: data.profile?.profilePhoto || ""
+      });
       setApiKeys(data.apiKeys || {});
       setCostTracking(data.costTracking || {});
       setDarkMode(data.darkMode || { defaultTheme: "system" });
       setNotifications(data.notifications || {});
+      setOutreachPersona(data.outreachPersona || { enabled: false, assistantName: "", assistantTitle: "", assistantEmail: "", assistantAvatar: "", companyName: "Ocia Studio" });
+      setOutreachPipeline(data.outreachPipeline || { minimumConfidence: 0.6, autoRewrite: true, maximumRewriteAttempts: 1, showDebug: false, qualityGateStrictness: "standard" });
+      setOutreachEmailTemplate({ ...defaultOutreachEmailTemplate, ...(data.outreachEmailTemplate || {}) });
       const firstIndustry = data.industries?.[0];
       const firstService = data.services?.[0];
       if (firstIndustry) selectIndustry(firstIndustry, data.services || []);
@@ -153,7 +201,10 @@ export default function SettingsPage() {
       apiKeys,
       costTracking,
       darkMode,
-      notifications
+      notifications,
+      outreachPersona,
+      outreachPipeline,
+      outreachEmailTemplate
     };
     const { data } = await api.put("/settings/app", payload);
     setSettings(data);
@@ -196,6 +247,22 @@ export default function SettingsPage() {
     await loadSettings();
   }
 
+  async function generateKnowledgeModel(force = false) {
+    if (!knowledgeForm.businessType && !knowledgeForm.industry) return push("Add a business type or industry first", "error");
+    setGeneratingKnowledge(true);
+    try {
+      const { data } = await api.post("/outreach/knowledge", { ...knowledgeForm, force });
+      setKnowledgePreview(data);
+      push(force ? "Knowledge model regenerated" : "Knowledge model ready");
+      const list = await api.get("/outreach/knowledge");
+      setKnowledgeModels(list.data || []);
+    } catch (error) {
+      push(error.response?.data?.message || "Could not generate knowledge model", "error");
+    } finally {
+      setGeneratingKnowledge(false);
+    }
+  }
+
   function toggleRecommendedService(serviceId) {
     const next = new Set(selectedRecommended);
     if (next.has(serviceId)) next.delete(serviceId);
@@ -233,7 +300,7 @@ export default function SettingsPage() {
           ["Tokens used", Number(costSummary.tokensUsed || 0).toLocaleString()],
           ["Scans run", Number(costSummary.scansRun || 0).toLocaleString()]
         ].map(([label, value]) => (
-          <div key={label} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div key={label} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</p>
             <p className="mt-2 text-2xl font-semibold">{value}</p>
           </div>
@@ -241,10 +308,16 @@ export default function SettingsPage() {
       </div>
 
       <div className="grid gap-6 xl:grid-cols-2">
-        <Section icon={UsersRound} title="Profile" description="Your admin identity inside the private dashboard.">
+        <Section icon={UsersRound} title="Profile" description="Your admin identity and sender profile for manual outreach.">
           <div className="grid gap-3 md:grid-cols-2">
             <Field label="Name"><Input value={profile.name} onChange={(e) => setProfile({ ...profile, name: e.target.value })} /></Field>
             <Field label="Email"><Input value={profile.email} onChange={(e) => setProfile({ ...profile, email: e.target.value })} /></Field>
+            <Field label="Sender name"><Input value={profile.senderName || ""} onChange={(e) => setProfile({ ...profile, senderName: e.target.value })} placeholder={profile.name || "Your name"} /></Field>
+            <Field label="Sender title"><Input value={profile.senderTitle || ""} onChange={(e) => setProfile({ ...profile, senderTitle: e.target.value })} placeholder="Founder" /></Field>
+            <Field label="Sender email"><Input value={profile.senderEmail || ""} onChange={(e) => setProfile({ ...profile, senderEmail: e.target.value })} placeholder={profile.email || "hello@ocia.studio"} /></Field>
+            <Field label="Company name"><Input value={profile.companyName || ""} onChange={(e) => setProfile({ ...profile, companyName: e.target.value })} placeholder="Ocia Studio" /></Field>
+            <Field label="Profile photo URL"><Input value={profile.profilePhoto || ""} onChange={(e) => setProfile({ ...profile, profilePhoto: e.target.value })} placeholder="Optional" /></Field>
+            <Field label="Signature"><Textarea value={profile.signature || ""} onChange={(e) => setProfile({ ...profile, signature: e.target.value })} placeholder={`${profile.senderName || profile.name || "Your name"}\nFounder\nOcia Studio`} /></Field>
           </div>
           <Button className="mt-4" variant="secondary" onClick={saveProfile}><Save size={16} /> Save profile</Button>
         </Section>
@@ -252,12 +325,12 @@ export default function SettingsPage() {
         <Section icon={UsersRound} title="Team / users" description="Current admins and future teammate slots.">
           <div className="space-y-2">
             {(settings?.users || []).map((member) => (
-              <div key={member.id} className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 p-3">
+              <div key={member.id} className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 p-3 dark:border-slate-800">
                 <div>
                   <p className="font-semibold">{member.name}</p>
-                  <p className="text-sm text-slate-500">{member.email}</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">{member.email}</p>
                 </div>
-                <Badge className="bg-slate-100 text-slate-700 ring-slate-200">{member.role}</Badge>
+                <Badge className="bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700">{member.role}</Badge>
               </div>
             ))}
           </div>
@@ -367,6 +440,155 @@ export default function SettingsPage() {
       </Section>
 
       <div className="grid gap-6 xl:grid-cols-2">
+        <Section icon={BrainCircuit} title="Outreach intelligence Phase 0" description="Build reusable business knowledge before scanning websites. This teaches Ocia what matters for each business type.">
+          <div className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-2">
+              <Field label="Business type"><Input value={knowledgeForm.businessType} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, businessType: e.target.value })} placeholder="Dental clinic, restaurant, law firm..." /></Field>
+              <Field label="Industry"><Input value={knowledgeForm.industry} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, industry: e.target.value })} placeholder="Healthcare, hospitality, legal..." /></Field>
+              <Field label="Country"><Input value={knowledgeForm.country} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, country: e.target.value })} placeholder="Singapore" /></Field>
+              <Field label="Target market"><Input value={knowledgeForm.targetMarket} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, targetMarket: e.target.value })} placeholder="Local consumers, high-income homeowners..." /></Field>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button disabled={generatingKnowledge} onClick={() => generateKnowledgeModel(false)}><BrainCircuit size={16} /> {generatingKnowledge ? "Generating..." : "Generate model"}</Button>
+              <Button variant="secondary" disabled={generatingKnowledge} onClick={() => generateKnowledgeModel(true)}>Regenerate</Button>
+            </div>
+            {knowledgePreview && (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Latest model</p>
+                <h3 className="mt-1 font-semibold">{knowledgePreview.businessType}</h3>
+                <p className="mt-2 text-sm leading-6 text-slate-600">{knowledgePreview.summary}</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {(knowledgePreview.observationPriorities || []).slice(0, 5).map((item) => <Badge key={item} className="bg-white text-slate-700 ring-slate-200">{item}</Badge>)}
+                </div>
+              </div>
+            )}
+            <div>
+              <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-400">Saved models</h3>
+              <div className="space-y-2">
+                {knowledgeModels.slice(0, 4).map(({ key, model, updatedAt }) => (
+                  <button key={key} type="button" onClick={() => setKnowledgePreview(model)} className="w-full rounded-2xl border border-slate-200 p-3 text-left transition hover:bg-slate-50">
+                    <p className="font-semibold">{model.businessType || model.input?.businessType || "Business model"}</p>
+                    <p className="mt-1 text-xs text-slate-500">{model.input?.country || "Any country"} · updated {formatDate(updatedAt)}</p>
+                  </button>
+                ))}
+                {!knowledgeModels.length && <p className="rounded-2xl border border-dashed border-slate-300 p-4 text-sm text-slate-500">No Phase 0 knowledge models yet.</p>}
+              </div>
+            </div>
+          </div>
+        </Section>
+
+        <Section icon={UsersRound} title="Outreach persona" description="Optional team persona for signing generated emails instead of the logged-in user's sender profile.">
+          <div className="space-y-4">
+            <label className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 p-3 text-sm font-medium dark:border-slate-800">
+              Enable persona
+              <input type="checkbox" checked={outreachPersona.enabled === true} onChange={(e) => setOutreachPersona({ ...outreachPersona, enabled: e.target.checked })} />
+            </label>
+            <div className="grid gap-3 md:grid-cols-2">
+              <Field label="Assistant name"><Input value={outreachPersona.assistantName || ""} onChange={(e) => setOutreachPersona({ ...outreachPersona, assistantName: e.target.value })} placeholder="Alex" /></Field>
+              <Field label="Assistant title"><Input value={outreachPersona.assistantTitle || ""} onChange={(e) => setOutreachPersona({ ...outreachPersona, assistantTitle: e.target.value })} placeholder="Client Success" /></Field>
+              <Field label="Assistant email"><Input value={outreachPersona.assistantEmail || ""} onChange={(e) => setOutreachPersona({ ...outreachPersona, assistantEmail: e.target.value })} placeholder="hello@ocia.studio" /></Field>
+              <Field label="Company name"><Input value={outreachPersona.companyName || ""} onChange={(e) => setOutreachPersona({ ...outreachPersona, companyName: e.target.value })} placeholder="Ocia Studio" /></Field>
+              <Field label="Assistant avatar URL"><Input value={outreachPersona.assistantAvatar || ""} onChange={(e) => setOutreachPersona({ ...outreachPersona, assistantAvatar: e.target.value })} placeholder="Optional" /></Field>
+            </div>
+            <p className="text-sm text-slate-500 dark:text-slate-400">Keep this as a simple Ocia team identity. The generator will not invent fake credentials or company history.</p>
+          </div>
+        </Section>
+
+        <Section icon={SlidersHorizontal} title="Outreach email template" description="Control the reusable greeting, opening, closing, and signature wrapped around the generated core insight.">
+          <div className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-2">
+              <Field label="Greeting template">
+                <Textarea
+                  className="min-h-20"
+                  value={outreachEmailTemplate.greetingTemplate || ""}
+                  onChange={(e) => setOutreachEmailTemplate({ ...outreachEmailTemplate, greetingTemplate: e.target.value })}
+                  placeholder={'Hi {{contact.firstName || "there"}},'}
+                />
+              </Field>
+              <Field label="Opening line template">
+                <Textarea
+                  className="min-h-20"
+                  value={outreachEmailTemplate.openingLineTemplate || ""}
+                  onChange={(e) => setOutreachEmailTemplate({ ...outreachEmailTemplate, openingLineTemplate: e.target.value })}
+                  placeholder="Optional line before the AI-written core insight"
+                />
+              </Field>
+              <Field label="Closing question template">
+                <Textarea
+                  className="min-h-20"
+                  value={outreachEmailTemplate.closingQuestionTemplate || ""}
+                  onChange={(e) => setOutreachEmailTemplate({ ...outreachEmailTemplate, closingQuestionTemplate: e.target.value })}
+                  placeholder="Was that intentional?"
+                />
+              </Field>
+              <Field label="Sign-off template">
+                <Textarea
+                  className="min-h-20"
+                  value={outreachEmailTemplate.signOffTemplate || ""}
+                  onChange={(e) => setOutreachEmailTemplate({ ...outreachEmailTemplate, signOffTemplate: e.target.value })}
+                  placeholder="Thanks,"
+                />
+              </Field>
+              <Field label="Signature template">
+                <Textarea
+                  className="min-h-28"
+                  value={outreachEmailTemplate.signatureTemplate || ""}
+                  onChange={(e) => setOutreachEmailTemplate({ ...outreachEmailTemplate, signatureTemplate: e.target.value })}
+                  placeholder={"{{sender.name}}\n{{sender.title}}\n{{sender.company}}"}
+                />
+              </Field>
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
+                <p className="text-sm font-semibold">Supported variables</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {outreachTemplateVariables.map((variable) => (
+                    <code key={variable} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">{variable}</code>
+                  ))}
+                </div>
+                <p className="mt-3 text-xs leading-5 text-slate-500 dark:text-slate-400">Use a fallback like <code>{'{{contact.firstName || "there"}}'}</code> when a value might be missing.</p>
+              </div>
+            </div>
+          </div>
+        </Section>
+
+        <Section icon={SlidersHorizontal} title="Outreach pipeline" description="Advanced controls for the Analyze → Review → Send workflow. These stay out of the main screen.">
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label="Minimum confidence">
+              <Input
+                type="number"
+                min="0"
+                max="1"
+                step="0.05"
+                value={outreachPipeline.minimumConfidence ?? 0.6}
+                onChange={(e) => setOutreachPipeline({ ...outreachPipeline, minimumConfidence: e.target.value })}
+              />
+            </Field>
+            <Field label="Maximum rewrite attempts">
+              <Input
+                type="number"
+                min="0"
+                max="3"
+                value={outreachPipeline.maximumRewriteAttempts ?? 1}
+                onChange={(e) => setOutreachPipeline({ ...outreachPipeline, maximumRewriteAttempts: e.target.value })}
+              />
+            </Field>
+            <Field label="Quality gate strictness">
+              <Select value={outreachPipeline.qualityGateStrictness || "standard"} onChange={(e) => setOutreachPipeline({ ...outreachPipeline, qualityGateStrictness: e.target.value })}>
+                <option value="relaxed">Relaxed</option>
+                <option value="standard">Standard</option>
+                <option value="strict">Strict</option>
+              </Select>
+            </Field>
+            <label className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 p-3 text-sm font-medium dark:border-slate-800">
+              Auto rewrite after failed quality gate
+              <input type="checkbox" checked={outreachPipeline.autoRewrite !== false} onChange={(e) => setOutreachPipeline({ ...outreachPipeline, autoRewrite: e.target.checked })} />
+            </label>
+            <label className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 p-3 text-sm font-medium dark:border-slate-800 md:col-span-2">
+              Show debug panels by default
+              <input type="checkbox" checked={outreachPipeline.showDebug === true} onChange={(e) => setOutreachPipeline({ ...outreachPipeline, showDebug: e.target.checked })} />
+            </label>
+          </div>
+        </Section>
+
         <Section icon={Moon} title="Dark mode" description="Set the default theme preference for this workspace.">
           <Select value={darkMode.defaultTheme || "system"} onChange={(e) => setDarkMode({ ...darkMode, defaultTheme: e.target.value })}>
             <option value="system">System default</option>
@@ -378,7 +600,7 @@ export default function SettingsPage() {
         <Section icon={Bell} title="Notifications" description="Choose which event types should appear in the notification center.">
           <div className="grid gap-2 md:grid-cols-2">
             {Object.entries(notificationLabels).map(([key, label]) => (
-              <label key={key} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 p-3 text-sm font-medium">
+              <label key={key} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 p-3 text-sm font-medium dark:border-slate-800">
                 {label}
                 <input type="checkbox" checked={notifications[key] !== false} onChange={(e) => setNotifications({ ...notifications, [key]: e.target.checked })} />
               </label>

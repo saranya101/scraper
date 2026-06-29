@@ -129,6 +129,12 @@ model User {
   id            String              @id @default(cuid())
   name          String
   email         String              @unique
+  senderName    String?
+  senderTitle   String?
+  senderEmail   String?
+  companyName   String?
+  signature     String?             @db.Text
+  profilePhoto  String?
   passwordHash  String
   role          UserRole            @default(ADMIN)
   notes         LeadNote[]
@@ -303,6 +309,26 @@ model AppSetting {
   updatedAt DateTime @updatedAt
 
   @@map("app_settings")
+}
+
+model ConsultantKnowledgeModel {
+  id                     String   @id @default(cuid())
+  businessType           String
+  normalizedBusinessType String
+  industry               String
+  normalizedIndustry     String
+  country                String   @default("")
+  market                 String   @default("")
+  knowledgeJson          Json
+  version                String
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@unique([normalizedBusinessType, normalizedIndustry, country, market, version])
+  @@index([normalizedBusinessType])
+  @@index([normalizedIndustry])
+  @@index([version])
+  @@map("consultant_knowledge_models")
 }
 
 model IndustryScoringRule {

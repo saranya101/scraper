@@ -28,6 +28,28 @@ const settingDefaults = {
   emailSending: {
     dailySendLimit: 25,
     cooldownDays: 14
+  },
+  outreachPersona: {
+    enabled: false,
+    assistantName: "",
+    assistantTitle: "",
+    assistantEmail: "",
+    assistantAvatar: "",
+    companyName: "Ocia Studio"
+  },
+  outreachPipeline: {
+    minimumConfidence: 0.6,
+    autoRewrite: true,
+    maximumRewriteAttempts: 1,
+    showDebug: false,
+    qualityGateStrictness: "standard"
+  },
+  outreachEmailTemplate: {
+    greetingTemplate: 'Hi {{contact.firstName || "there"}},',
+    openingLineTemplate: "",
+    closingQuestionTemplate: "",
+    signOffTemplate: "Thanks,",
+    signatureTemplate: "{{sender.name}}\n{{sender.title}}\n{{sender.company}}"
   }
 };
 
@@ -96,15 +118,33 @@ async function costSummary(costTracking) {
 
 export async function getSettings(userId) {
   await ensureDefaultCatalog();
-  const [users, industries, services, apiKeys, costTracking, darkMode, notifications, emailSending] = await Promise.all([
-    prisma.user.findMany({ select: { id: true, name: true, email: true, role: true, createdAt: true }, orderBy: { name: "asc" } }),
+  const [users, industries, services, apiKeys, costTracking, darkMode, notifications, emailSending, outreachPersona, outreachPipeline, outreachEmailTemplate] = await Promise.all([
+    prisma.user.findMany({
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        senderName: true,
+        senderTitle: true,
+        senderEmail: true,
+        companyName: true,
+        signature: true,
+        profilePhoto: true,
+        role: true,
+        createdAt: true
+      },
+      orderBy: { name: "asc" }
+    }),
     prisma.industry.findMany({ include: { scoringRule: true }, orderBy: { name: "asc" } }),
     prisma.agencyService.findMany({ orderBy: { name: "asc" } }),
     setting("apiKeys"),
     setting("costTracking"),
     setting("darkMode"),
     setting("notifications"),
-    setting("emailSending")
+    setting("emailSending"),
+    setting("outreachPersona"),
+    setting("outreachPipeline"),
+    setting("outreachEmailTemplate")
   ]);
 
   return {
@@ -116,6 +156,9 @@ export async function getSettings(userId) {
     darkMode,
     notifications,
     emailSending,
+    outreachPersona,
+    outreachPipeline,
+    outreachEmailTemplate,
     industries,
     services
   };
@@ -124,14 +167,35 @@ export async function getSettings(userId) {
 export async function updateProfile(userId, input = {}) {
   const data = {
     ...(input.name ? { name: String(input.name).trim() } : {}),
-    ...(input.email ? { email: String(input.email).trim().toLowerCase() } : {})
+    ...(input.email ? { email: String(input.email).trim().toLowerCase() } : {}),
+    ...(Object.prototype.hasOwnProperty.call(input, "senderName") ? { senderName: String(input.senderName || "").trim() || null } : {}),
+    ...(Object.prototype.hasOwnProperty.call(input, "senderTitle") ? { senderTitle: String(input.senderTitle || "").trim() || null } : {}),
+    ...(Object.prototype.hasOwnProperty.call(input, "senderEmail") ? { senderEmail: String(input.senderEmail || "").trim().toLowerCase() || null } : {}),
+    ...(Object.prototype.hasOwnProperty.call(input, "companyName") ? { companyName: String(input.companyName || "").trim() || null } : {}),
+    ...(Object.prototype.hasOwnProperty.call(input, "signature") ? { signature: String(input.signature || "").trim() || null } : {}),
+    ...(Object.prototype.hasOwnProperty.call(input, "profilePhoto") ? { profilePhoto: String(input.profilePhoto || "").trim() || null } : {})
   };
   if (!Object.keys(data).length) throw new HttpError(422, "Nothing to update");
-  return prisma.user.update({ where: { id: userId }, data, select: { id: true, name: true, email: true, role: true } });
+  return prisma.user.update({
+    where: { id: userId },
+    data,
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      senderName: true,
+      senderTitle: true,
+      senderEmail: true,
+      companyName: true,
+      signature: true,
+      profilePhoto: true,
+      role: true
+    }
+  });
 }
 
 export async function updateAppSettings(userId, input = {}) {
-  const keys = ["apiKeys", "costTracking", "darkMode", "notifications", "emailSending"];
+  const keys = ["apiKeys", "costTracking", "darkMode", "notifications", "emailSending", "outreachPersona", "outreachPipeline", "outreachEmailTemplate"];
   for (const key of keys) {
     if (input[key] !== undefined) {
       const current = await setting(key);

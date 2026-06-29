@@ -63,6 +63,7 @@ export function mergeExtractedData(primary = {}, secondary = null) {
     socialLinks: unique([...(primary.socialLinks || []), ...(secondary.socialLinks || [])]).slice(0, 30),
     emails: unique([...(primary.emails || []), ...(secondary.emails || [])]).slice(0, 25),
     phones: unique([...(primary.phones || []), ...(secondary.phones || [])]).slice(0, 25),
+    structuredData: [...(primary.structuredData || []), ...(secondary.structuredData || [])].slice(0, 12),
     contactPageUrl: primary.contactPageUrl || secondary.contactPageUrl
   };
   return {
@@ -111,6 +112,16 @@ export async function extractPageData(page, baseUrl, scanDepth = "QUICK") {
       const html = document.documentElement?.outerHTML || "";
       const scripts = Array.from(document.querySelectorAll("script[src]")).map((script) => script.src).slice(0, 80);
       const links = Array.from(document.querySelectorAll("link[href],a[href]")).map((link) => link.href).slice(0, 140);
+      const structuredData = Array.from(document.querySelectorAll('script[type="application/ld+json"]'))
+        .map((script) => {
+          try {
+            return JSON.parse(script.textContent || "{}");
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean)
+        .slice(0, 8);
       return {
         title,
         visibleText: text,
@@ -121,6 +132,7 @@ export async function extractPageData(page, baseUrl, scanDepth = "QUICK") {
         contactPageUrl,
         canonical,
         metaDescription: document.querySelector("meta[name='description']")?.content || "",
+        structuredData,
         html,
         scripts,
         links

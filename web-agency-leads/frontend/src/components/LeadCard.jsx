@@ -2,6 +2,7 @@ import { Archive, ArrowUpRight, Building2, MapPin, MoreHorizontal, Trash2 } from
 import { Link } from "react-router-dom";
 import { Badge } from "./ui/Badge.jsx";
 import { Button } from "./ui/Button.jsx";
+import ScreenshotPreview from "./ScreenshotPreview.jsx";
 import { domain, formatDate, priorities, statuses, websiteStatuses } from "../utils/format.js";
 
 export default function LeadCard({ lead, onEdit, onArchive, onDelete, selected = false, onSelect }) {
@@ -10,9 +11,13 @@ export default function LeadCard({ lead, onEdit, onArchive, onDelete, selected =
   return (
     <article className="group rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-soft">
       {lead.screenshotPath && (
-        <Link to={`/leads/${lead.id}`} className="mb-5 block overflow-hidden rounded-2xl border border-slate-200 bg-slate-100">
-          <img src={lead.screenshotPath} alt={`${lead.company} website screenshot`} className="h-40 w-full object-cover transition duration-300 group-hover:scale-[1.02]" />
-        </Link>
+        <ScreenshotPreview
+          src={lead.screenshotPath}
+          alt={`${lead.company} website screenshot`}
+          variant="card"
+          className="mb-5 border border-slate-200"
+          imageClassName="transition duration-300 group-hover:scale-[1.02]"
+        />
       )}
       <div className="mb-5 flex items-start justify-between gap-4">
         {onSelect && <input type="checkbox" checked={selected} onChange={() => onSelect(lead.id)} className="mt-1 h-4 w-4 rounded border-slate-300" />}

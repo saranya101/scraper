@@ -40,6 +40,12 @@ const statusFilters = [
   ["NEEDS_REVIEW", "Needs Review"]
 ];
 
+const emailSentFilters = [
+  ["", "All outreach"],
+  ["sent", "Email sent"],
+  ["not_sent", "Not sent"]
+];
+
 const defaultTemplate = {
   greetingTemplate: 'Hi {{contact.firstName || "there"}},',
   openingLineTemplate: "",
@@ -249,7 +255,7 @@ export default function OutreachPage() {
   const [selectedIds, setSelectedIds] = useState([]);
   const [selectedLeadId, setSelectedLeadId] = useState("");
   const [pipelineResult, setPipelineResult] = useState(null);
-  const [filters, setFilters] = useState({ search: "", industryId: "", serviceId: "", pipelineWorkflowStatus: "", highConfidence: "", needsReview: "" });
+  const [filters, setFilters] = useState({ search: "", industryId: "", serviceId: "", pipelineWorkflowStatus: "", highConfidence: "", needsReview: "", emailSentState: "" });
   const [loading, setLoading] = useState(true);
   const [runningLeadId, setRunningLeadId] = useState("");
   const [sending, setSending] = useState(false);
@@ -328,6 +334,7 @@ export default function OutreachPage() {
     if (filters.pipelineWorkflowStatus) next.pipelineWorkflowStatus = filters.pipelineWorkflowStatus;
     if (filters.highConfidence) next.highConfidence = "true";
     if (filters.needsReview) next.needsReview = "true";
+    if (filters.emailSentState) next.emailSentState = filters.emailSentState;
     return next;
   }, [filters]);
 
@@ -1231,6 +1238,9 @@ export default function OutreachPage() {
                 {catalog.industries.map((industry) => <option key={industry.id} value={industry.id}>{industry.name}</option>)}
               </Select>
             </div>
+            <Select value={filters.emailSentState} onChange={(event) => setFilters({ ...filters, emailSentState: event.target.value })}>
+              {emailSentFilters.map(([value, label]) => <option key={value || "all"} value={value}>{label}</option>)}
+            </Select>
             <div className="grid grid-cols-2 gap-2">
               <Button variant="secondary" disabled={!selectedIds.length || batch?.running || sending} onClick={() => runBatch("selected")}>Run selected</Button>
               <Button variant="secondary" disabled={!visibleLeads.length || batch?.running || sending} onClick={() => runBatch("all")}>Run all</Button>
@@ -1266,6 +1276,7 @@ export default function OutreachPage() {
               const topServices = selectedServiceLabelsForLead(lead).slice(0, 3);
               const progressState = batchLeadProgress[lead.id];
               const progressLabel = overallLeadBatchStage(progressState);
+              const emailSent = Boolean(lead.lastEmailSentAt || lead.pipelineStage === "SENT");
               return (
                 <div ref={(node) => { if (node) leadRefs.current[lead.id] = node; }} key={lead.id} className={`rounded-2xl border p-3 transition ${selectedLead?.id === lead.id ? "border-slate-950 bg-slate-50 dark:border-white dark:bg-slate-800/80" : "border-slate-200 bg-white hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:hover:bg-slate-800"}`}>
                   <div className="flex gap-3">
@@ -1292,6 +1303,9 @@ export default function OutreachPage() {
                         {state.qualityScore && <Badge className="bg-white text-slate-700 ring-slate-200 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700">Q {state.qualityScore}/10</Badge>}
                         <Badge className={lead.serviceAnalysisStatus === "completed" ? "bg-emerald-100 text-emerald-800 ring-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-100 dark:ring-emerald-800" : lead.serviceAnalysisStatus === "failed" ? "bg-rose-100 text-rose-800 ring-rose-200 dark:bg-rose-950/60 dark:text-rose-100 dark:ring-rose-800" : "bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700"}>
                           Services: {lead.serviceAnalysisStatus || "not_started"}
+                        </Badge>
+                        <Badge className={emailSent ? "bg-emerald-100 text-emerald-800 ring-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-100 dark:ring-emerald-800" : "bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700"}>
+                          Email: {emailSent ? "sent" : "not sent"}
                         </Badge>
                         <Badge className={leadReport?.status === "approved" || leadReport?.status === "attached" || leadReport?.status === "sent" ? "bg-emerald-100 text-emerald-800 ring-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-100 dark:ring-emerald-800" : leadReport?.status === "failed" || leadReport?.status === "failed_quality_gate" ? "bg-rose-100 text-rose-800 ring-rose-200 dark:bg-rose-950/60 dark:text-rose-100 dark:ring-rose-800" : "bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700"}>
                           Report: {leadReport?.status || "missing"}

@@ -1956,7 +1956,13 @@ export async function getQueue(query = {}) {
   const where = {
     ...(query.industryId ? { industryId: query.industryId } : {}),
     ...(query.industry && !query.industryId ? { industry: { contains: query.industry, mode: "insensitive" } } : {}),
-    ...(query.serviceId ? { serviceOpportunities: { some: { serviceId: query.serviceId, recommended: true } } } : {})
+    ...(query.serviceId ? { serviceOpportunities: { some: { serviceId: query.serviceId, recommended: true } } } : {}),
+    ...(query.emailSentState === "sent"
+      ? { OR: [{ lastEmailSentAt: { not: null } }, { pipelineStage: "SENT" }] }
+      : {}),
+    ...(query.emailSentState === "not_sent"
+      ? { lastEmailSentAt: null, pipelineStage: { not: "SENT" } }
+      : {})
   };
   const leads = await prisma.lead.findMany({
     where,

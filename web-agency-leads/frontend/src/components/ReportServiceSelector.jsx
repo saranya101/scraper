@@ -1,26 +1,47 @@
 import { Wand2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import { REPORT_SERVICE_OPTIONS } from "../constants/reportServices.js";
 import { analyzeCompatibleReportServices } from "../utils/reportServiceCompatibility.js";
 import { Badge } from "./ui/Badge.jsx";
 import { Button } from "./ui/Button.jsx";
 
-export default function ReportServiceSelector({ value = [], onChange, label = "Services to include in PDF report", analysisTarget = null }) {
-  const [analysis, setAnalysis] = useState(null);
+function persistedAnalysisFromTarget(target) {
+  if (!target?.analyzedServices?.length) return null;
+  const selectedIds = Array.isArray(target.selectedReportServices) ? target.selectedReportServices : [];
+  const matches = target.analyzedServices
+    .map((item) => ({
+      id: item.serviceId,
+      label: item.serviceLabel || REPORT_SERVICE_OPTIONS.find((service) => service.id === item.serviceId)?.label || item.serviceId,
+      score: Math.round(Number(item.fitScore || 0)),
+      reasons: [item.reason || "Suggested from saved service analysis."]
+    }))
+    .sort((left, right) => right.score - left.score || left.label.localeCompare(right.label));
+  return {
+    company: target.company || "this business",
+    industry: target.industryRef?.name || target.industry || "",
+    selectedIds,
+    matches,
+    summary: `Compatible services for ${target.company || "this business"}${target.industryRef?.name || target.industry ? ` in ${target.industryRef?.name || target.industry}` : ""} based on saved service analysis.`
+  };
+}
 
-  useEffect(() => {
-    setAnalysis(null);
-  }, [analysisTarget?.id, analysisTarget?.company, analysisTarget?.industry, analysisTarget?.industryRef?.name]);
+export default function ReportServiceSelector({ value = [], onChange, label = "Services to include in PDF report", analysisTarget = null, onAnalyze = null }) {
+  const [localAnalysis, setLocalAnalysis] = useState(null);
+  const analysis = useMemo(() => persistedAnalysisFromTarget(analysisTarget) || localAnalysis, [analysisTarget, localAnalysis]);
 
   function toggle(id) {
     const next = value.includes(id) ? value.filter((item) => item !== id) : [...value, id];
     onChange(next);
   }
 
-  function analyzeServices() {
+  async function analyzeServices() {
     if (!analysisTarget) return;
+    if (onAnalyze) {
+      await onAnalyze();
+      return;
+    }
     const next = analyzeCompatibleReportServices(analysisTarget);
-    setAnalysis(next);
+    setLocalAnalysis(next);
     if (next.selectedIds.length) onChange(next.selectedIds);
   }
 

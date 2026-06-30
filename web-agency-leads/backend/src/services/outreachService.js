@@ -1964,23 +1964,46 @@ export async function getQueue(query = {}) {
     take: Math.min(Math.max(Number(query.limit || 50), 1), 100),
     include: {
       industryRef: true,
+      auditReports: { orderBy: { createdAt: "desc" }, take: 1 },
       outreachDrafts: { orderBy: { updatedAt: "desc" }, take: 1 },
       serviceOpportunities: {
-        where: { recommended: true },
         include: { service: true },
-        take: 1
+        orderBy: [{ score: "desc" }, { createdAt: "desc" }],
+        take: 4
       }
     }
   });
   const rows = leads.map((lead) => {
-    const state = lead.scanEvidence?.outreachPipeline || null;
+    const scanEvidence = lead.scanEvidence && typeof lead.scanEvidence === "object" ? lead.scanEvidence : {};
+    const state = scanEvidence.outreachPipeline || null;
+    const serviceAnalysis = scanEvidence.serviceAnalysis && typeof scanEvidence.serviceAnalysis === "object" ? scanEvidence.serviceAnalysis : {};
+    const analyzedServices = Array.isArray(serviceAnalysis.analyzedServices) ? serviceAnalysis.analyzedServices : [];
+    const selectedReportServices = Array.isArray(serviceAnalysis.selectedReportServices)
+      ? serviceAnalysis.selectedReportServices
+      : Array.isArray(state?.selectedReportServices)
+        ? state.selectedReportServices
+        : [];
+    const recommendedServices = analyzedServices.length
+      ? analyzedServices
+      : (lead.serviceOpportunities || []).map((item) => ({
+          serviceId: item.service?.slug?.replace(/-/g, "_") || item.serviceId,
+          serviceLabel: item.service?.name || item.serviceId,
+          fitScore: Math.max(0, Math.min(100, Number(item.score || 0) * 10)),
+          reason: item.reason || ""
+        }));
     return {
       ...lead,
       pipelineWorkflow: state || { status: "NOT_ANALYSED", label: "Not Analysed" },
       pipelineWorkflowStatus: state?.status || "NOT_ANALYSED",
       pipelineConfidence: state?.confidence || null,
       pipelineQualityScore: state?.qualityScore || null,
-      pipelineObservationCategory: state?.observationCategory || null
+      pipelineObservationCategory: state?.observationCategory || null,
+      serviceAnalysisStatus: serviceAnalysis.status || "not_started",
+      serviceAnalysisError: serviceAnalysis.error || null,
+      serviceAnalyzedAt: serviceAnalysis.analyzedAt || null,
+      analyzedServices: recommendedServices,
+      selectedReportServices,
+      selectedServicesSource: serviceAnalysis.selectedServicesSource || state?.selectedServicesSource || "auto"
     };
   });
   if (query.pipelineWorkflowStatus) {

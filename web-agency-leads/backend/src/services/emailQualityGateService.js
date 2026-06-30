@@ -1,4 +1,3 @@
-import { countEmailWords, EMAIL_WORD_MAX, EMAIL_WORD_MIN } from "../utils/emailWordLimit.js";
 import { HttpError } from "../utils/httpError.js";
 import { SERVICE_EMAIL_ANGLES, SERVICE_EMAIL_ANGLE_IDS } from "../constants/serviceEmailAngles.js";
 
@@ -50,7 +49,8 @@ function normalizeReportContext(input = {}) {
     ? input.reportContext.selectedServices.map((item) => typeof item === "string" ? { id: item, label: item } : item).filter((item) => item?.id)
     : [];
   return {
-    selectedServices: services
+    selectedServices: services,
+    attachmentEnabled: input.reportContext?.attachmentEnabled === true
   };
 }
 
@@ -187,7 +187,7 @@ function soundsHuman(body) {
 function couldSendToAnyone(body, context) {
   const lower = body.toLowerCase();
   if (!hasCompanySpecificity(lower, context)) return true;
-  if ((context.industry || context.businessType) && !hasIndustrySpecificity(lower, context)) return true;
+  if (hasIndustrySpecificity(lower, context)) return false;
   return includesAny(lower, [
     "your online presence",
     "your digital presence",
@@ -223,14 +223,13 @@ function scoreFromFailures(failedChecks) {
 function reasonForFailure(failedChecks) {
   if (failedChecks.includes("service_mismatch")) return "Email does not match selected PDF services. Regenerate email.";
   if (failedChecks.includes("mentions_unselected_services")) return "The email mentions services that were not selected for the report.";
-  if (failedChecks.includes("missing_report_reference")) return "The email does not mention the attached report even though the report is enabled.";
+  if (failedChecks.includes("missing_report_reference")) return "The email does not mention the attached report even though attachment is enabled.";
   if (failedChecks.includes("generic")) return "The email is too generic and could be sent to almost any company.";
-  if (failedChecks.includes("not_specific_to_business")) return "The observation does not feel specific enough to this business.";
-  if (failedChecks.includes("not_reply_worthy")) return "The email is unlikely to make the owner curious enough to reply.";
+  if (failedChecks.includes("not_specific_to_business")) return "The email does not feel specific enough to this business.";
   if (failedChecks.includes("sounds_ai_generated")) return "The email sounds too much like an automated agency email.";
   if (failedChecks.includes("repetitive")) return "The email repeats the same idea in different wording.";
   if (failedChecks.includes("weak_question")) return "The closing question does not feel natural enough.";
-  if (failedChecks.includes("word_limit")) return "The email is outside the accepted 100-150 word range.";
+  if (failedChecks.includes("not_specific_to_observation")) return "The email does not clearly connect to the selected services and main issue.";
   return "The email is not strong enough to send.";
 }
 
@@ -244,30 +243,26 @@ function feedbackKey(check) {
     not_specific_to_business: "notSpecificToBusiness",
     sounds_ai_generated: "soundsAiGenerated",
     sentence_filler: "sentenceFiller",
-    weak_question: "weakQuestion",
-    word_limit: "wordLimit",
-    not_reply_worthy: "notReplyWorthy"
+    weak_question: "weakQuestion"
   }[check] || check;
 }
 
-function feedbackMessage(check, { wordCount, context }) {
+function feedbackMessage(check, { context }) {
   const hasIndustryContext = Boolean(context.industry || context.businessType);
   return {
     service_mismatch: "Email does not match selected PDF services. Regenerate email.",
     mentions_unselected_services: "The email references services that were not selected for the attached report.",
-    missing_report_reference: "The email should mention the attached website opportunity report when report attachment is enabled.",
-    word_limit: `The email is ${wordCount} words, but the accepted range is ${EMAIL_WORD_MIN}-${EMAIL_WORD_MAX} words.`,
+    missing_report_reference: "The email should mention the attached website opportunity report only when report attachment is enabled.",
     generic: "The wording could apply to almost any business.",
     not_personalised: hasIndustryContext
       ? "The email does not reference anything unique about this company's industry, business type, or website."
       : "The email does not reference enough specific detail from the company or website.",
-    not_specific_to_observation: "The email does not clearly connect back to the selected observation.",
+    not_specific_to_observation: "The email does not clearly connect back to the selected services and main issue.",
     not_specific_to_business: "The email does not reference the company in a way that makes it feel written for this business.",
     sounds_ai_generated: "The email contains wording that feels automated, agency-like, or too polished.",
     repetitive: "The email repeats the same idea in different wording.",
     sentence_filler: "One or more sentences do not add clear new information.",
-    weak_question: "The closing question feels unnatural, pushy, or asks for more than a simple reply.",
-    not_reply_worthy: "The email does not create enough curiosity or business relevance for an owner to reply."
+    weak_question: "The closing question feels unnatural, pushy, or asks for more than a simple reply."
   }[check] || "This check failed.";
 }
 
@@ -284,11 +279,9 @@ export function evaluateEmailQuality(input = {}) {
   const context = normalizeContext(input);
   const reportContext = normalizeReportContext(input);
   const failedChecks = [];
-  const wordCount = countEmailWords(email.body);
   const serviceDetails = reportContext.selectedServices.length ? serviceMatchDetails(email.body, reportContext) : { matchesSelected: false, mentionsUnselected: false };
   const observationSpecific = hasObservationSpecificity(email.body, observation) || serviceDetails.matchesSelected;
 
-  if (wordCount < EMAIL_WORD_MIN || wordCount > EMAIL_WORD_MAX) failedChecks.push("word_limit");
   if (couldSendToAnyone(email.body, context)) failedChecks.push("generic", "not_personalised");
   if (!observationSpecific) failedChecks.push("not_specific_to_observation");
   if (!hasCompanySpecificity(email.body, context)) failedChecks.push("not_specific_to_business");
@@ -299,29 +292,8 @@ export function evaluateEmailQuality(input = {}) {
   if (reportContext.selectedServices.length) {
     if (!serviceDetails.matchesSelected) failedChecks.push("service_mismatch");
     if (serviceDetails.mentionsUnselected) failedChecks.push("mentions_unselected_services");
-    if (!/attached a short website opportunity report/i.test(email.body)) failedChecks.push("missing_report_reference");
+    if (reportContext.attachmentEnabled && !/attached a short website opportunity report/i.test(email.body)) failedChecks.push("missing_report_reference");
   }
-
-  const commerciallyInteresting = includesAny(email.body, [
-    "choose",
-    "enquiry",
-    "appointment",
-    "trust",
-    "pricing",
-    "search",
-    "booking",
-    "question",
-    "questions",
-    "reply",
-    "follow-up",
-    "contact",
-    "first-time visitor",
-    "ready to act",
-    "remember",
-    "decisive",
-    "clear"
-  ]);
-  if (!commerciallyInteresting) failedChecks.push("not_reply_worthy");
 
   const uniqueFailures = [...new Set(failedChecks)];
   const approved = uniqueFailures.length === 0;
@@ -330,7 +302,7 @@ export function evaluateEmailQuality(input = {}) {
     reason: approved ? "The email feels personal, specific, and human enough to send." : reasonForFailure(uniqueFailures),
     qualityScore: scoreFromFailures(uniqueFailures),
     failedChecks: uniqueFailures,
-    feedback: buildFeedback(uniqueFailures, { wordCount, context })
+    feedback: buildFeedback(uniqueFailures, { context })
   };
 }
 

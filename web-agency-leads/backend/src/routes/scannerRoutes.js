@@ -18,6 +18,7 @@ const scanBody = z.object({
   scanDepth: z.enum(["QUICK", "FULL", "DEEP"]).default("QUICK"),
   minReviews: z.coerce.number().int().min(0).optional(),
   hasWebsiteOnly: z.coerce.boolean().optional(),
+  websiteRequirement: z.enum(["ANY", "HAS_WEBSITE", "NO_WEBSITE_ONLY"]).optional(),
   services: z.string().optional(),
   exclusions: z.array(z.string()).optional(),
   maxResults: z.coerce.number().int().min(1).max(100).default(10),

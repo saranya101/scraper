@@ -31,7 +31,7 @@ const initialForm = {
   maxResults: 10,
   scanDepth: "QUICK",
   minReviews: "",
-  hasWebsiteOnly: true,
+  websiteRequirement: "HAS_WEBSITE",
   includeKeywords: "",
   excludeKeywords: "",
   exclusions: ["universities", "government", "directories", "agencies", "social_only"],
@@ -201,7 +201,7 @@ export default function ScannerPage() {
               city: form.city,
               maxResults: Number(form.maxResults),
               minReviews: form.minReviews === "" ? undefined : Number(form.minReviews),
-              hasWebsiteOnly: form.hasWebsiteOnly,
+              websiteRequirement: form.websiteRequirement,
               filters: {
                 industrySlug: form.industrySlug,
                 includeKeywords: form.includeKeywords,
@@ -410,9 +410,13 @@ export default function ScannerPage() {
             </details>
             <label><span className="mb-1.5 block text-sm font-medium">Priority filter</span><Select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}><option value="">Any</option><option value="HOT">HOT</option><option value="WARM">WARM</option><option value="COLD">COLD</option></Select></label>
             <label><span className="mb-1.5 block text-sm font-medium">Website status</span><Select value={form.websiteStatus} onChange={(e) => setForm({ ...form, websiteStatus: e.target.value })}><option value="">Any</option>{Object.entries(websiteStatuses).map(([key, item]) => <option key={key} value={key}>{item.label}</option>)}</Select></label>
-            <label className="flex items-center gap-3 rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium">
-              <input type="checkbox" checked={form.hasWebsiteOnly} onChange={(e) => setForm({ ...form, hasWebsiteOnly: e.target.checked })} className="h-4 w-4 rounded border-slate-300" />
-              Has website only
+            <label>
+              <span className="mb-1.5 block text-sm font-medium">Website requirement</span>
+              <Select value={form.websiteRequirement} onChange={(e) => setForm({ ...form, websiteRequirement: e.target.value })}>
+                <option value="ANY">Any business</option>
+                <option value="HAS_WEBSITE">Has website only</option>
+                <option value="NO_WEBSITE_ONLY">No website only</option>
+              </Select>
             </label>
               </>
             )}

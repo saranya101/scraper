@@ -71,7 +71,7 @@ export async function searchGooglePlaces(input) {
 
   const target = Math.min(Number(input.maxResults || 10), 100);
   const minReviews = Number(input.minReviews || 0);
-  const hasWebsiteOnly = Boolean(input.hasWebsiteOnly);
+  const websiteRequirement = input.websiteRequirement || (input.hasWebsiteOnly ? "HAS_WEBSITE" : "ANY");
   const seen = new Set();
   const businesses = [];
   const enrichedInput = { ...input, industryProfile: await getIndustryProfileConfig(input.industrySlug) };
@@ -98,7 +98,8 @@ export async function searchGooglePlaces(input) {
 
     for (const place of data.places || []) {
       const business = placeToBusiness(place, enrichedInput);
-      if (hasWebsiteOnly && !business.website) continue;
+      if (websiteRequirement === "HAS_WEBSITE" && !business.website) continue;
+      if (websiteRequirement === "NO_WEBSITE_ONLY" && business.website) continue;
       if (business.googleReviewCount < minReviews) continue;
       if (isExcludedBusiness(business, enrichedInput)) continue;
 

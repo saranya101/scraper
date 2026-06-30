@@ -53,21 +53,54 @@ function firstName(value) {
   return name ? name.split(/\s+/)[0] : "";
 }
 
+function serviceObservationFromInput(input = {}) {
+  const services = Array.isArray(input.reportContext?.selectedServices)
+    ? input.reportContext.selectedServices.map((item) => typeof item === "string" ? { id: item, label: item } : item).filter((item) => item?.id)
+    : [];
+  const labels = services.map((item) => clean(item.label || item.id)).filter(Boolean);
+  const problems = Array.isArray(input.reportContext?.topServiceProblems)
+    ? input.reportContext.topServiceProblems.map(clean).filter(Boolean)
+    : [];
+  const recommendations = Array.isArray(input.reportContext?.topServiceRecommendations)
+    ? input.reportContext.topServiceRecommendations.map(clean).filter(Boolean)
+    : [];
+  const summary = clean(input.reportContext?.reportSummary || "");
+  const focus = labels.slice(0, 3).join(", ");
+  const problem = problems[0] || summary || (focus ? `${focus} could be clearer for potential customers` : "the main next step could be clearer for potential customers");
+  const expected = focus
+    ? `The website should make ${focus} feel clear, credible, and easy to act on.`
+    : "The website should make the offer feel clear, credible, and easy to act on.";
+  const actual = problem.endsWith(".") ? problem : `${problem}.`;
+  const reasoning = recommendations[0] || summary || problem;
+  return {
+    id: `service-analysis:${services.map((item) => item.id).join(",") || "selected-services"}`,
+    title: focus ? `Service analysis for ${focus}` : "Service analysis summary",
+    category: "service_analysis",
+    status: "service_analysis",
+    expected,
+    actual,
+    description: summary || actual,
+    reasoning
+  };
+}
+
 function normalizeObservation(input = {}) {
   const observation = input.selectedObservation || input.observation;
-  if (!observation || typeof observation !== "object") throw new HttpError(422, "A single selected observation is required");
+  const fallback = serviceObservationFromInput(input);
+  const source = observation && typeof observation === "object" ? observation : fallback;
+  if (!source || typeof source !== "object") throw new HttpError(422, "Selected services or a selected observation are required");
   const normalized = {
-    id: clean(observation.id),
-    title: clean(observation.title),
-    description: clean(observation.description),
-    category: clean(observation.category),
-    expected: clean(observation.expected),
-    actual: clean(observation.actual),
-    status: clean(observation.status),
-    reasoning: clean(observation.reasoning),
-    scores: observation.scores && typeof observation.scores === "object" ? observation.scores : null,
-    supportingEvidence: Array.isArray(observation.supportingEvidence) ? observation.supportingEvidence.map(clean).filter(Boolean) : [],
-    blueprintSection: clean(observation.blueprintSection)
+    id: clean(source.id),
+    title: clean(source.title),
+    description: clean(source.description),
+    category: clean(source.category),
+    expected: clean(source.expected),
+    actual: clean(source.actual),
+    status: clean(source.status),
+    reasoning: clean(source.reasoning),
+    scores: source.scores && typeof source.scores === "object" ? source.scores : null,
+    supportingEvidence: Array.isArray(source.supportingEvidence) ? source.supportingEvidence.map(clean).filter(Boolean) : [],
+    blueprintSection: clean(source.blueprintSection)
   };
   if (!normalized.id || !normalized.expected || !normalized.actual) {
     throw new HttpError(422, "Selected observation must include id, expected, and actual");
@@ -750,7 +783,7 @@ export async function writeEmail(input = {}) {
   const validated = generatedWithLengthGuard ? validateEmail(generatedWithLengthGuard, normalized.observation, normalized, "openai") : { ok: false };
   const fallbackWithLengthGuard = ensureMaximumEmailLength(ensureMinimumEmailLength(fallbackEmail(normalized), normalized, "fallback"), normalized, "fallback");
   const email = validated.ok ? validated : validateEmail(fallbackWithLengthGuard, normalized.observation, normalized, "fallback");
-  if (!email.ok) throw new HttpError(422, "Could not create a compliant email from the selected observation", email.diagnostics);
+  if (!email.ok) throw new HttpError(422, "Could not create a compliant email from the analyzed services", email.diagnostics);
   return {
     selectedObservationId: normalized.observation.id,
     subject: email.subject,

@@ -70,6 +70,10 @@ function cleanGeneratedBody(body = "") {
   return text.trim();
 }
 
+function normalizeForComparison(value = "") {
+  return String(value || "").replace(/\r/g, "").replace(/\s+/g, " ").trim();
+}
+
 function emailPrefix(email = "") {
   return String(email || "").split("@")[0] || "";
 }
@@ -166,6 +170,35 @@ function sameServiceSelection(left = [], right = []) {
   return a.length === b.length && a.every((item, index) => item === b[index]);
 }
 
+function selectedServiceIdsForLead(lead) {
+  return lead?.selectedReportServices?.length
+    ? lead.selectedReportServices
+    : lead?.pipelineWorkflow?.selectedReportServices?.length
+      ? lead.pipelineWorkflow.selectedReportServices
+      : [];
+}
+
+function selectedServiceLabelsForLead(lead) {
+  const analyzed = Array.isArray(lead?.analyzedServices) ? lead.analyzedServices : [];
+  const selected = new Set(selectedServiceIdsForLead(lead));
+  return analyzed
+    .filter((item) => selected.has(item.serviceId))
+    .map((item) => item.serviceLabel)
+    .filter(Boolean);
+}
+
+function overallLeadBatchStage(progress) {
+  if (!progress) return "";
+  if (progress.status === "failed") return "Failed";
+  if (progress.status === "completed") return "Completed";
+  if (progress.emailStatus === "completed") return "Email sent";
+  if (progress.reportStatus === "running") return "Generating PDF";
+  if (progress.emailStatus === "running") return "Generating Email";
+  if (progress.analysisStatus === "running") return "Analysing";
+  if (progress.status === "queued") return "Queued";
+  return "";
+}
+
 function reportSentence(selectedServices = []) {
   const focusAreas = naturalJoin(selectedServices.map((item) => item.label).filter(Boolean).slice(0, 3));
   return focusAreas
@@ -220,6 +253,7 @@ export default function OutreachPage() {
   const [loading, setLoading] = useState(true);
   const [runningLeadId, setRunningLeadId] = useState("");
   const [sending, setSending] = useState(false);
+  const [singleSendProgress, setSingleSendProgress] = useState(null);
   const [savingDraft, setSavingDraft] = useState(false);
   const [draft, setDraft] = useState({ fromName: "", fromEmail: "", toEmail: "", subject: "", body: "" });
   const [testEmail, setTestEmail] = useState("");
@@ -229,18 +263,26 @@ export default function OutreachPage() {
   const [reportAction, setReportAction] = useState("");
   const [reportServices, setReportServices] = useState(DEFAULT_REPORT_SERVICE_IDS);
   const [batchReportServices, setBatchReportServices] = useState(DEFAULT_REPORT_SERVICE_IDS);
+  const [batchOptions, setBatchOptions] = useState({
+    analyzeServicesIfMissing: true,
+    generateReport: true,
+    generateEmail: true,
+    runQualityGate: true,
+    includeAttachmentWhenSending: true
+  });
+  const [batchConcurrency, setBatchConcurrency] = useState(4);
   const [includeReport, setIncludeReport] = useState(true);
   const [liveQualityGate, setLiveQualityGate] = useState(null);
   const [deleteAllOpen, setDeleteAllOpen] = useState(false);
   const [deleteAllText, setDeleteAllText] = useState("");
   const [deletingAll, setDeletingAll] = useState(false);
   const [batch, setBatch] = useState(null);
+  const [batchLeadProgress, setBatchLeadProgress] = useState({});
 
   const selectedLead = useMemo(() => leads.find((lead) => lead.id === selectedLeadId) || leads[0] || null, [leads, selectedLeadId]);
   const currentState = pipelineState(selectedLead);
   const currentResult = pipelineResult || resultFromLead(selectedLead);
   const storedQualityGate = currentResult?.qualityGate || currentState?.qualityGate || null;
-  const qualityGate = liveQualityGate || storedQualityGate || null;
   const observation = currentResult?.selectedObservation || currentState?.selectedObservation || null;
   const gmailSender = emailAccounts.find((account) => account.provider === "GOOGLE");
   const gmailReady = Boolean(gmailSender?.configured && gmailSender?.active);
@@ -262,6 +304,14 @@ export default function OutreachPage() {
     selectedServices: previewReportServices
   });
   const fullEmail = draft.subject ? `Subject: ${draft.subject}\n\n${finalBody}` : finalBody;
+  const savedEmailSubject = currentState?.editedDraft?.subject || currentResult?.email?.subject || currentState?.email?.subject || "";
+  const savedEmailBody = currentState?.editedDraft?.fullEmail || currentState?.editedDraft?.body || currentResult?.email?.body || currentState?.email?.body || "";
+  const hasUnsavedEmailChanges = Boolean(
+    normalizeForComparison(draft.subject) !== normalizeForComparison(savedEmailSubject) ||
+    normalizeForComparison(finalBody) !== normalizeForComparison(savedEmailBody)
+  );
+  const qualityGate = storedQualityGate || null;
+  const previewQualityGate = hasUnsavedEmailChanges ? liveQualityGate : null;
   const selectedReportFocus = naturalJoin(reportServices.map((serviceId) => serviceLabelsById[serviceId] || serviceId));
   const emailServiceMismatch = Boolean(reportServices.length && !sameServiceSelection(emailSelectedServiceIds, reportServices));
   const reportServiceMismatch = Boolean(reportReady && approvedReportServiceIds.length && !sameServiceSelection(approvedReportServiceIds, reportServices));
@@ -331,7 +381,8 @@ export default function OutreachPage() {
     } catch (error) {
       if (error.response?.status !== 404) push(error.response?.data?.message || "Could not load report", "error");
       setReport(null);
-      setReportServices(DEFAULT_REPORT_SERVICE_IDS);
+      const lead = leads.find((item) => item.id === leadId);
+      setReportServices(selectedServiceIdsForLead(lead).length ? selectedServiceIdsForLead(lead) : DEFAULT_REPORT_SERVICE_IDS);
     } finally {
       setReportLoading(false);
     }
@@ -361,6 +412,7 @@ export default function OutreachPage() {
       subject: savedDraft?.subject || sourceEmail.subject || "",
       body: savedDraft?.body || cleanGeneratedBody(sourceEmail.body || "")
     });
+    if (selectedServiceIdsForLead(selectedLead).length) setReportServices(selectedServiceIdsForLead(selectedLead));
     setReport(selectedLead.auditReports?.[0] || null);
   }, [selectedLead?.id, senderProfile?.id, gmailSender?.email, outreachPersona?.enabled, outreachPersona?.assistantName, outreachPersona?.assistantEmail]);
 
@@ -446,32 +498,147 @@ export default function OutreachPage() {
     });
   }
 
+  function updateLeadBatchProgress(leadId, patch) {
+    setBatchLeadProgress((current) => ({
+      ...current,
+      [leadId]: {
+        ...(current[leadId] || {}),
+        ...patch
+      }
+    }));
+  }
+
+  function clearBatchProgress(leadIds = []) {
+    if (!leadIds.length) return setBatchLeadProgress({});
+    setBatchLeadProgress((current) => {
+      const next = { ...current };
+      for (const leadId of leadIds) delete next[leadId];
+      return next;
+    });
+  }
+
+  async function analyzeServicesForLead(lead, { force = false, silent = false } = {}) {
+    const { data } = await api.post("/outreach/pipeline/analyze-services", { leadId: lead.id, force });
+    const analyzedServices = Array.isArray(data.analyzedServices) ? data.analyzedServices : [];
+    const selectedReportServices = Array.isArray(data.selectedReportServices) ? data.selectedReportServices : [];
+    const normalizedStatus = data.status === "completed" && analyzedServices.length && selectedReportServices.length
+      ? "completed"
+      : data.status === "failed"
+        ? "failed"
+        : "not_started";
+    const nextLead = {
+      ...lead,
+      serviceAnalysisStatus: normalizedStatus,
+      serviceAnalysisError: data.error || null,
+      serviceAnalyzedAt: data.analyzedAt || null,
+      analyzedServices,
+      selectedReportServices,
+      selectedServicesSource: data.selectedServicesSource || "auto"
+    };
+    setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...nextLead } : item));
+    if (selectedLead?.id === lead.id && nextLead.selectedReportServices?.length) setReportServices(nextLead.selectedReportServices);
+    if (normalizedStatus !== "completed") {
+      const message = data.error || "Service analysis did not produce any selected services";
+      if (!silent) push(message, "error");
+      throw new Error(message);
+    }
+    if (!silent) push("Services analyzed");
+    return nextLead;
+  }
+
+  async function persistSelectedServices(leadId, selectedServices) {
+    const { data } = await api.put(`/outreach/pipeline/services/${leadId}`, { selectedReportServices: selectedServices });
+    setLeads((current) => current.map((lead) => lead.id === leadId ? {
+      ...lead,
+      serviceAnalysisStatus: data.status || lead.serviceAnalysisStatus,
+      serviceAnalysisError: data.error || null,
+      serviceAnalyzedAt: data.analyzedAt || lead.serviceAnalyzedAt,
+      analyzedServices: data.analyzedServices || lead.analyzedServices || [],
+      selectedReportServices: data.selectedReportServices || selectedServices,
+      selectedServicesSource: data.selectedServicesSource || "manual",
+      pipelineWorkflow: lead.pipelineWorkflow ? {
+        ...lead.pipelineWorkflow,
+        selectedReportServices: data.selectedReportServices || selectedServices,
+        selectedServicesSource: data.selectedServicesSource || "manual"
+      } : lead.pipelineWorkflow
+    } : lead));
+    if (selectedLead?.id === leadId) setReportServices(data.selectedReportServices || selectedServices);
+    return data;
+  }
+
+  async function changeSelectedLeadServices(next) {
+    setReportServices(next);
+    if (!selectedLead?.id) return;
+    try {
+      await persistSelectedServices(selectedLead.id, next);
+    } catch (error) {
+      push(error.response?.data?.message || "Could not save selected services", "error");
+    }
+  }
+
+  function leadRunEligibility(lead) {
+    if (!lead?.website) return { eligible: false, reason: "Missing website" };
+    if (!contactEmail(lead)) return { eligible: false, reason: "Missing contact email" };
+    return { eligible: true };
+  }
+
   function moveLead(direction) {
     const index = visibleLeads.findIndex((lead) => lead.id === selectedLead?.id);
     const next = visibleLeads[index + direction];
     if (next) selectLead(next);
   }
 
-  async function runPipeline(lead = selectedLead) {
+  async function runPipeline(lead = selectedLead, options = {}) {
     if (!lead) return push("Select a lead first", "error");
+    const eligibility = leadRunEligibility(lead);
+    if (!eligibility.eligible) {
+      push(eligibility.reason, "error");
+      throw new Error(eligibility.reason);
+    }
     setRunningLeadId(lead.id);
     setLeadWorkflow(lead.id, { ...pipelineState(lead), status: "ANALYSING", label: "Analysing" });
     const generatingTimer = setTimeout(() => {
       setLeadWorkflow(lead.id, { ...pipelineState(lead), status: "GENERATING_EMAIL", label: "Generating Email" });
     }, 900);
     try {
-      const selectedServicesForLead = lead.id === selectedLead?.id ? reportServices : batchReportServices;
+      let workingLead = lead;
+      if (options.analyzeServicesIfMissing !== false && (!selectedServiceIdsForLead(workingLead).length || workingLead.serviceAnalysisStatus !== "completed")) {
+        workingLead = await analyzeServicesForLead(workingLead, { silent: true });
+      }
+      const selectedServicesForLead = options.selectedServices
+        || (lead.id === selectedLead?.id ? reportServices : selectedServiceIdsForLead(workingLead))
+        || batchReportServices;
+      if (!selectedServicesForLead?.length) {
+        throw new Error("No services selected for this lead");
+      }
       const { data } = await api.post("/outreach/pipeline", {
         leadId: lead.id,
         company: { name: lead.company, website: lead.website },
         industry: lead.industryRef?.name || lead.industry || "",
         sender: { name: activeSender.name, title: activeSender.title, company: activeSender.company },
-        selectedServices: selectedServicesForLead
+        selectedServices: selectedServicesForLead,
+        attachmentEnabled: options.attachmentEnabled !== false,
+        analyzeServicesIfMissing: options.analyzeServicesIfMissing !== false,
+        generateReport: options.generateReport !== false
       });
       setLeadWorkflow(lead.id, data.pipelineState || { status: data.status === "approved" ? "APPROVED" : data.status === "no_suitable_angle" ? "NO_SUITABLE_ANGLE" : "NEEDS_REVIEW", result: data });
+      setLeads((current) => current.map((item) => item.id === lead.id ? {
+        ...item,
+        pipelineWorkflow: data.pipelineState || item.pipelineWorkflow,
+        pipelineWorkflowStatus: data.pipelineState?.status || item.pipelineWorkflowStatus,
+        pipelineConfidence: data.pipelineState?.confidence || item.pipelineConfidence,
+        pipelineQualityScore: data.pipelineState?.qualityScore || item.pipelineQualityScore,
+        pipelineObservationCategory: data.pipelineState?.observationCategory || item.pipelineObservationCategory,
+        selectedReportServices: data.pipelineState?.selectedReportServices || selectedServicesForLead,
+        selectedServicesSource: data.pipelineState?.selectedServicesSource || item.selectedServicesSource,
+        analyzedServices: data.pipelineState?.analyzedServices || item.analyzedServices,
+        serviceAnalysisStatus: data.pipelineState?.serviceAnalysisStatus || item.serviceAnalysisStatus,
+        auditReports: data.report ? [data.report] : item.auditReports
+      } : item));
       if (lead.id === selectedLead?.id) {
         setPipelineResult(data);
         setComposerFromResult(lead, data);
+        if (data.pipelineState?.selectedReportServices?.length) setReportServices(data.pipelineState.selectedReportServices);
         if (data.report) {
           setReport(data.report);
           const returnedServices = (data.report.selectedServices || []).map((item) => item.id).filter(Boolean);
@@ -480,14 +647,14 @@ export default function OutreachPage() {
           await loadReportForLead(lead.id);
         }
       }
-      if (data.status === "approved" && data.reportError) push(`Email approved, but the PDF report failed: ${data.reportError}`, "error");
-      if (data.status === "approved") push("Email approved for review");
-      if (data.status === "rejected") push("A service-matched draft was generated, but it still needs review.", "error");
-      if (data.status === "no_suitable_angle") push("Automatic angle selection was too strict, so review the best available draft below.", "error");
+      if (!options.silent && data.status === "approved" && data.reportError) push(`Email approved, but the PDF report failed: ${data.reportError}`, "error");
+      if (!options.silent && data.status === "approved") push("Email approved for review");
+      if (!options.silent && data.status === "rejected") push("A service-matched draft was generated, but it still needs review.", "error");
+      if (!options.silent && data.status === "no_suitable_angle") push("Automatic angle selection was too strict, so review the best available draft below.", "error");
       return data;
     } catch (error) {
       setLeadWorkflow(lead.id, { ...pipelineState(lead), status: "REJECTED", label: "Rejected", qualityGate: { reason: error.response?.data?.message || "Pipeline failed" } });
-      push(error.response?.data?.message || "Pipeline failed", "error");
+      if (!options.silent) push(error.response?.data?.message || "Pipeline failed", "error");
       throw error;
     } finally {
       clearTimeout(generatingTimer);
@@ -553,9 +720,12 @@ export default function OutreachPage() {
     if (emailServiceMismatch) return push("Email does not match the selected report services. Regenerate email before sending.", "error");
     if (reportServiceMismatch && includeReport) return push("The approved PDF report does not match the currently selected services. Regenerate and approve the report first.", "error");
     setSending(true);
+    setSingleSendProgress({ running: true, label: "Preparing email...", percent: 15, error: false });
     try {
+      setSingleSendProgress({ running: true, label: "Saving latest draft...", percent: 35, error: false });
       const saved = await saveDraft();
       if (!saved) return;
+      setSingleSendProgress({ running: true, label: `Sending to ${draft.toEmail}...`, percent: 70, error: false });
       const { data } = await api.post("/email/send", {
         leadId: selectedLead.id,
         toEmail: draft.toEmail,
@@ -571,14 +741,18 @@ export default function OutreachPage() {
         companyName: selectedLead.company
       });
       if (data.status === "SENT") {
+        setSingleSendProgress({ running: true, label: "Finalizing send...", percent: 95, error: false });
         push("Email sent");
         await loadData();
         await loadReportForLead(selectedLead.id);
+        setSingleSendProgress({ running: false, label: "Email sent", percent: 100, error: false });
         moveLead(1);
       } else {
+        setSingleSendProgress({ running: false, label: data.errorMessage || "Email send failed", percent: 100, error: true });
         push(data.errorMessage || "Email send failed", "error");
       }
     } catch (error) {
+      setSingleSendProgress({ running: false, label: error.response?.data?.message || "Email send failed", percent: 100, error: true });
       push(error.response?.data?.message || "Email send failed", "error");
     } finally {
       setSending(false);
@@ -642,27 +816,214 @@ export default function OutreachPage() {
     const targets = source === "all" ? visibleLeads : visibleLeads.filter((lead) => selectedIds.includes(lead.id));
     if (!targets.length) return push("Select at least one lead", "error");
     cancelBatchRef.current = false;
-    const progress = { total: targets.length, completed: 0, approved: 0, rejected: 0, skipped: 0, errors: 0, current: "" };
+    clearBatchProgress();
+    targets.forEach((lead) => updateLeadBatchProgress(lead.id, {
+      status: "queued",
+      analysisStatus: batchOptions.analyzeServicesIfMissing ? "queued" : "skipped",
+      reportStatus: batchOptions.generateReport ? "queued" : "skipped",
+      emailStatus: batchOptions.generateEmail ? "queued" : "skipped",
+      error: null
+    }));
+    const progress = { total: targets.length, completed: 0, approved: 0, rejected: 0, skipped: 0, errors: 0, current: "", skippedReasons: [], failedReasons: [] };
+    setBatch({ ...progress, running: true });
+    const queue = [...targets];
+    const concurrency = Math.max(1, Number(batchConcurrency || 4));
+    const worker = async () => {
+      while (queue.length && !cancelBatchRef.current) {
+        const lead = queue.shift();
+        if (!lead) return;
+        progress.current = lead.company;
+        setBatch({ ...progress, running: true });
+        try {
+          await processLeadBatchPipeline(lead, {
+            analyzeServicesIfMissing: true,
+            generateReport: batchOptions.generateReport,
+            generateEmail: batchOptions.generateEmail || batchOptions.runQualityGate
+          });
+          progress.approved += 1;
+        } catch (error) {
+          progress.errors += 1;
+          progress.failedReasons.push(`${lead.company}: ${error.response?.data?.message || error.message || "Lead processing failed"}`);
+        }
+        progress.completed += 1;
+        setBatch({ ...progress, running: true });
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, targets.length) }, () => worker()));
+    if (cancelBatchRef.current && progress.completed < progress.total) {
+      progress.skipped += progress.total - progress.completed;
+    }
+    setBatch({ ...progress, running: false, current: "" });
+    push(`Batch pipeline complete: ${progress.approved} completed, ${progress.skipped} skipped, ${progress.errors} failed`);
+    await loadData();
+  }
+
+  async function analyzeServicesForBatch(source = "selected") {
+    const targets = source === "all" ? visibleLeads : visibleLeads.filter((lead) => selectedIds.includes(lead.id));
+    if (!targets.length) return push("Select at least one lead", "error");
+    cancelBatchRef.current = false;
+    const progress = { total: targets.length, completed: 0, approved: 0, rejected: 0, skipped: 0, errors: 0, current: "", skippedReasons: [], failedReasons: [] };
     setBatch({ ...progress, running: true });
     for (const lead of targets) {
-      if (cancelBatchRef.current) {
-        progress.skipped += targets.length - progress.completed;
-        break;
-      }
+      if (cancelBatchRef.current) break;
       progress.current = lead.company;
       setBatch({ ...progress, running: true });
       try {
-        const result = await runPipeline(lead);
-        if (result.status === "approved") progress.approved += 1;
-        else progress.rejected += 1;
-      } catch {
+        const analyzed = await analyzeServicesForLead(lead, { force: true, silent: true });
+        if (analyzed.serviceAnalysisStatus === "completed") progress.approved += 1;
+        else throw new Error(analyzed.serviceAnalysisError || "Service analysis failed");
+      } catch (error) {
         progress.errors += 1;
+        progress.failedReasons.push(`${lead.company}: ${error.response?.data?.message || error.message || "Service analysis failed"}`);
       }
       progress.completed += 1;
       setBatch({ ...progress, running: true });
     }
     setBatch({ ...progress, running: false, current: "" });
-    push("Batch pipeline finished");
+    push(`Service analysis complete: ${progress.approved} completed, ${progress.errors} failed`);
+    await loadData();
+  }
+
+  async function bulkApproveReports() {
+    const targets = visibleLeads.filter((lead) => selectedIds.includes(lead.id));
+    if (!targets.length) return push("Select at least one lead", "error");
+    const summary = { approved: 0, skipped: 0, failed: 0, skippedReasons: [], failedReasons: [] };
+    for (const lead of targets) {
+      const leadReport = lead.auditReports?.[0] || null;
+      if (!leadReport) {
+        summary.skipped += 1;
+        summary.skippedReasons.push(`${lead.company}: Report missing`);
+        continue;
+      }
+      if (!leadReport.qualityGate?.passed) {
+        summary.skipped += 1;
+        summary.skippedReasons.push(`${lead.company}: Report failed quality gate`);
+        continue;
+      }
+      if (["approved", "attached", "sent"].includes(leadReport.status)) {
+        summary.skipped += 1;
+        summary.skippedReasons.push(`${lead.company}: Report already approved`);
+        continue;
+      }
+      try {
+        await api.post(`/leads/${lead.id}/report/approve`);
+        summary.approved += 1;
+      } catch (error) {
+        summary.failed += 1;
+        summary.failedReasons.push(`${lead.company}: ${error.response?.data?.message || "PDF file missing"}`);
+      }
+    }
+    await loadData();
+    push(`Bulk report approval complete: ${summary.approved} approved, ${summary.skipped} skipped, ${summary.failed} failed`);
+    setBatch({ total: targets.length, completed: targets.length, running: false, current: "", ...summary });
+  }
+
+  async function sendSelectedEmails() {
+    const targets = visibleLeads.filter((lead) => selectedIds.includes(lead.id));
+    if (!targets.length) return push("Select at least one lead", "error");
+    if (!gmailReady) return push("Connect Gmail before sending", "error");
+    cancelBatchRef.current = false;
+    clearBatchProgress(targets.map((lead) => lead.id));
+    targets.forEach((lead) => updateLeadBatchProgress(lead.id, {
+      status: "queued",
+      emailStatus: "queued",
+      error: null
+    }));
+    const summary = { approved: 0, skipped: 0, failed: 0, skippedReasons: [], failedReasons: [] };
+    setBatch({ total: targets.length, completed: 0, approved: 0, skipped: 0, failed: 0, running: true, current: "", mode: "sending", skippedReasons: [], failedReasons: [] });
+    for (const lead of targets) {
+      if (cancelBatchRef.current) {
+        summary.skipped += 1;
+        summary.skippedReasons.push(`${lead.company}: Sending cancelled before this lead started`);
+        updateLeadBatchProgress(lead.id, { status: "failed", emailStatus: "skipped", error: "Sending cancelled" });
+        setBatch((current) => ({ ...(current || {}), completed: summary.approved + summary.skipped + summary.failed, approved: summary.approved, skipped: summary.skipped, failed: summary.failed, skippedReasons: [...summary.skippedReasons], failedReasons: [...summary.failedReasons] }));
+        continue;
+      }
+      updateLeadBatchProgress(lead.id, { status: "running", emailStatus: "queued", error: null });
+      setBatch((current) => ({ ...(current || {}), running: true, current: lead.company }));
+      const state = pipelineState(lead);
+      const leadReport = lead.auditReports?.[0] || null;
+      const email = state?.editedDraft?.fullEmail || state?.email?.body || "";
+      const subject = state?.editedDraft?.subject || state?.email?.subject || "";
+      const emailSelectedServices = state?.emailSelectedServices || selectedServiceIdsForLead(lead);
+      if (state.status !== "APPROVED") {
+        summary.skipped += 1;
+        summary.skippedReasons.push(`${lead.company}: Lead not approved`);
+        updateLeadBatchProgress(lead.id, { status: "failed", emailStatus: "skipped", error: "Lead not approved" });
+        setBatch((current) => ({ ...(current || {}), completed: summary.approved + summary.skipped + summary.failed, approved: summary.approved, skipped: summary.skipped, failed: summary.failed, skippedReasons: [...summary.skippedReasons], failedReasons: [...summary.failedReasons] }));
+        continue;
+      }
+      if (!contactEmail(lead)) {
+        summary.skipped += 1;
+        summary.skippedReasons.push(`${lead.company}: Missing recipient email`);
+        updateLeadBatchProgress(lead.id, { status: "failed", emailStatus: "skipped", error: "Missing recipient email" });
+        setBatch((current) => ({ ...(current || {}), completed: summary.approved + summary.skipped + summary.failed, approved: summary.approved, skipped: summary.skipped, failed: summary.failed, skippedReasons: [...summary.skippedReasons], failedReasons: [...summary.failedReasons] }));
+        continue;
+      }
+      if (!subject || !email) {
+        summary.skipped += 1;
+        summary.skippedReasons.push(`${lead.company}: Email missing`);
+        updateLeadBatchProgress(lead.id, { status: "failed", emailStatus: "skipped", error: "Email missing" });
+        setBatch((current) => ({ ...(current || {}), completed: summary.approved + summary.skipped + summary.failed, approved: summary.approved, skipped: summary.skipped, failed: summary.failed, skippedReasons: [...summary.skippedReasons], failedReasons: [...summary.failedReasons] }));
+        continue;
+      }
+      if (!state?.qualityGate?.approved) {
+        summary.skipped += 1;
+        summary.skippedReasons.push(`${lead.company}: Email quality gate not approved`);
+        updateLeadBatchProgress(lead.id, { status: "failed", emailStatus: "skipped", error: "Email quality gate not approved" });
+        setBatch((current) => ({ ...(current || {}), completed: summary.approved + summary.skipped + summary.failed, approved: summary.approved, skipped: summary.skipped, failed: summary.failed, skippedReasons: [...summary.skippedReasons], failedReasons: [...summary.failedReasons] }));
+        continue;
+      }
+      if (!sameServiceSelection(emailSelectedServices, selectedServiceIdsForLead(lead))) {
+        summary.skipped += 1;
+        summary.skippedReasons.push(`${lead.company}: Email/report services do not match`);
+        updateLeadBatchProgress(lead.id, { status: "failed", emailStatus: "skipped", error: "Email/report services do not match" });
+        setBatch((current) => ({ ...(current || {}), completed: summary.approved + summary.skipped + summary.failed, approved: summary.approved, skipped: summary.skipped, failed: summary.failed, skippedReasons: [...summary.skippedReasons], failedReasons: [...summary.failedReasons] }));
+        continue;
+      }
+      if (batchOptions.includeAttachmentWhenSending && (!leadReport || !["approved", "attached", "sent"].includes(leadReport.status))) {
+        summary.skipped += 1;
+        summary.skippedReasons.push(`${lead.company}: Approved attachable report missing`);
+        updateLeadBatchProgress(lead.id, { status: "failed", emailStatus: "skipped", error: "Approved attachable report missing" });
+        setBatch((current) => ({ ...(current || {}), completed: summary.approved + summary.skipped + summary.failed, approved: summary.approved, skipped: summary.skipped, failed: summary.failed, skippedReasons: [...summary.skippedReasons], failedReasons: [...summary.failedReasons] }));
+        continue;
+      }
+      try {
+        updateLeadBatchProgress(lead.id, { status: "running", emailStatus: "running", error: null });
+        const { data } = await api.post("/email/send", {
+          leadId: lead.id,
+          toEmail: contactEmail(lead),
+          subject,
+          body: email,
+          includeReport: batchOptions.includeAttachmentWhenSending,
+          emailSelectedServices,
+          fromName: activeSender.name,
+          fromEmail: activeSender.email,
+          senderTitle: activeSender.title,
+          senderCompany: activeSender.company,
+          contactFirstName: firstName(lead),
+          companyName: lead.company
+        });
+        if (data.status === "SENT") {
+          summary.approved += 1;
+          updateLeadBatchProgress(lead.id, { status: "completed", emailStatus: "completed", error: null });
+        } else {
+          summary.failed += 1;
+          const message = data.errorMessage || "Email send failed";
+          summary.failedReasons.push(`${lead.company}: ${message}`);
+          updateLeadBatchProgress(lead.id, { status: "failed", emailStatus: "failed", error: message });
+        }
+      } catch (error) {
+        summary.failed += 1;
+        const message = error.response?.data?.message || "Email send failed";
+        summary.failedReasons.push(`${lead.company}: ${message}`);
+        updateLeadBatchProgress(lead.id, { status: "failed", emailStatus: "failed", error: message });
+      }
+      setBatch((current) => ({ ...(current || {}), completed: summary.approved + summary.skipped + summary.failed, approved: summary.approved, skipped: summary.skipped, failed: summary.failed, skippedReasons: [...summary.skippedReasons], failedReasons: [...summary.failedReasons] }));
+    }
+    await loadData();
+    push(`${cancelBatchRef.current ? "Bulk email sending stopped" : "Bulk email sending complete"}: ${summary.approved} sent, ${summary.skipped} skipped, ${summary.failed} failed`);
+    setBatch({ total: targets.length, completed: targets.length, running: false, current: "", mode: "sending", ...summary });
   }
 
   function toggleSelected(leadId) {
@@ -685,6 +1046,101 @@ export default function OutreachPage() {
     } finally {
       setReportAction("");
     }
+  }
+
+  async function generateReportForLead(lead, selectedServices, mode = "generate") {
+    const endpoint = mode === "regenerate" ? `/leads/${lead.id}/report/regenerate` : `/leads/${lead.id}/report/generate`;
+    const { data } = await api.post(endpoint, { selectedServices });
+    setLeads((current) => current.map((item) => item.id === lead.id ? {
+      ...item,
+      auditReports: data ? [data] : item.auditReports
+    } : item));
+    if (selectedLead?.id === lead.id) {
+      setReport(data);
+      const returnedServices = (data?.selectedServices || []).map((item) => item.id).filter(Boolean);
+      if (returnedServices.length) setReportServices(returnedServices);
+    }
+    return data;
+  }
+
+  async function retryFailedTaskOnce(taskName, task) {
+    try {
+      return await task();
+    } catch (_firstError) {
+      return await task();
+    }
+  }
+
+  async function processLeadBatchPipeline(lead, options = {}) {
+    const eligibility = leadRunEligibility(lead);
+    if (!eligibility.eligible) {
+      updateLeadBatchProgress(lead.id, { status: "failed", error: eligibility.reason });
+      throw new Error(eligibility.reason);
+    }
+
+    updateLeadBatchProgress(lead.id, {
+      status: "running",
+      analysisStatus: "queued",
+      reportStatus: options.generateReport === false ? "skipped" : "queued",
+      emailStatus: options.generateEmail === false ? "skipped" : "queued",
+      error: null
+    });
+
+    let workingLead = lead;
+    if (options.analyzeServicesIfMissing !== false) {
+      updateLeadBatchProgress(lead.id, { analysisStatus: "running" });
+      workingLead = await analyzeServicesForLead(lead, { silent: true });
+      updateLeadBatchProgress(lead.id, { analysisStatus: "completed" });
+    }
+
+    const selectedServices = selectedServiceIdsForLead(workingLead).length ? selectedServiceIdsForLead(workingLead) : batchReportServices;
+    if (!selectedServices.length) {
+      updateLeadBatchProgress(lead.id, { status: "failed", error: "No analyzed services selected" });
+      throw new Error("No analyzed services selected");
+    }
+
+    const tasks = [];
+
+    if (options.generateEmail !== false) {
+      tasks.push((async () => {
+        updateLeadBatchProgress(lead.id, { emailStatus: "running" });
+        const result = await retryFailedTaskOnce("email", () => runPipeline(workingLead, {
+          analyzeServicesIfMissing: false,
+          generateReport: false,
+          selectedServices,
+          attachmentEnabled: false,
+          silent: true
+        }));
+        updateLeadBatchProgress(lead.id, { emailStatus: "completed" });
+        return result;
+      })().catch((error) => {
+        updateLeadBatchProgress(lead.id, { emailStatus: "failed" });
+        throw new Error(error.response?.data?.message || error.message || "Email generation failed");
+      }));
+    }
+
+    if (options.generateReport !== false) {
+      tasks.push((async () => {
+        updateLeadBatchProgress(lead.id, { reportStatus: "running" });
+        const result = await retryFailedTaskOnce("report", () => generateReportForLead(workingLead, selectedServices));
+        updateLeadBatchProgress(lead.id, { reportStatus: "completed" });
+        return result;
+      })().catch((error) => {
+        updateLeadBatchProgress(lead.id, { reportStatus: "failed" });
+        throw new Error(error.response?.data?.message || error.message || "PDF generation failed");
+      }));
+    }
+
+    const settled = await Promise.allSettled(tasks);
+    const failure = settled.find((item) => item.status === "rejected");
+    if (failure) {
+      const errorMessage = failure.reason?.message || "Lead processing failed";
+      updateLeadBatchProgress(lead.id, { status: "failed", error: errorMessage });
+      throw new Error(errorMessage);
+    }
+
+    updateLeadBatchProgress(lead.id, { status: "completed" });
+    return { leadId: lead.id, selectedServices };
   }
 
   async function approveSelectedReport() {
@@ -730,6 +1186,7 @@ export default function OutreachPage() {
         </div>
         <div className="flex flex-wrap gap-2">
           <Button disabled={!selectedLead || Boolean(runningLeadId)} onClick={() => runPipeline()}><Play size={16} /> {runningLeadId === selectedLead?.id ? "Analysing..." : "Analyze"}</Button>
+          <Button variant="secondary" disabled={!selectedLead || Boolean(runningLeadId)} onClick={() => selectedLead && analyzeServicesForLead(selectedLead)}><RefreshCw size={16} /> Analyze services</Button>
           <Button variant="secondary" disabled={!selectedLead} onClick={() => resetLeads("current")}><RotateCcw size={16} /> Reset Current</Button>
           {user?.role === "ADMIN" && <Button variant="danger" onClick={() => setDeleteAllOpen(true)}><AlertTriangle size={16} /> Delete All Leads</Button>}
         </div>
@@ -739,14 +1196,21 @@ export default function OutreachPage() {
         <div className={`${card} p-4`}>
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
-              <h2 className="font-semibold">Batch progress</h2>
-              <p className={`mt-1 text-sm ${textMuted}`}>{batch.running ? `Processing ${batch.current || "lead"}...` : "Batch complete"}</p>
+              <h2 className="font-semibold">{batch.mode === "sending" ? "Bulk send progress" : "Batch progress"}</h2>
+              <p className={`mt-1 text-sm ${textMuted}`}>{batch.running ? `${batch.mode === "sending" ? "Sending" : "Processing"} ${batch.current || "lead"}...` : batch.mode === "sending" ? "Bulk sending complete" : "Batch complete"}</p>
             </div>
             {batch.running && <Button variant="secondary" onClick={() => { cancelBatchRef.current = true; }}>Cancel</Button>}
           </div>
           <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
             <div className="h-full bg-slate-950 transition-all dark:bg-white" style={{ width: `${batch.total ? (batch.completed / batch.total) * 100 : 0}%` }} />
           </div>
+          {!batch.running && (
+            <div className={`mt-4 grid gap-2 text-sm ${textMuted}`}>
+              <p>{batch.approved || 0} completed successfully · {batch.rejected || 0} needs review · {batch.skipped || 0} skipped · {batch.errors || batch.failed || 0} failed</p>
+              {batch.skippedReasons?.slice(0, 5).map((item) => <p key={item}>Skipped: {item}</p>)}
+              {batch.failedReasons?.slice(0, 5).map((item) => <p key={item}>Failed: {item}</p>)}
+            </div>
+          )}
         </div>
       )}
 
@@ -768,13 +1232,30 @@ export default function OutreachPage() {
               </Select>
             </div>
             <div className="grid grid-cols-2 gap-2">
-              <Button variant="secondary" disabled={!selectedIds.length || batch?.running} onClick={() => runBatch("selected")}>Run selected</Button>
-              <Button variant="secondary" disabled={!visibleLeads.length || batch?.running} onClick={() => runBatch("all")}>Run all</Button>
+              <Button variant="secondary" disabled={!selectedIds.length || batch?.running || sending} onClick={() => runBatch("selected")}>Run selected</Button>
+              <Button variant="secondary" disabled={!visibleLeads.length || batch?.running || sending} onClick={() => runBatch("all")}>Run all</Button>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="secondary" disabled={!selectedIds.length || batch?.running || sending} onClick={() => analyzeServicesForBatch("selected")}>Analyze selected</Button>
+              <Button variant="secondary" disabled={!visibleLeads.length || batch?.running || sending} onClick={() => analyzeServicesForBatch("all")}>Analyze services for all</Button>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="secondary" disabled={!selectedIds.length || batch?.running || sending} onClick={bulkApproveReports}>Approve selected reports</Button>
+              <Button variant="secondary" disabled={!selectedIds.length || batch?.running || sending} onClick={sendSelectedEmails}>Send selected emails</Button>
             </div>
             <details className="rounded-2xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/60">
-              <summary className="cursor-pointer text-sm font-semibold">Batch report services</summary>
-              <div className="mt-3">
-                <ReportServiceSelector value={batchReportServices} onChange={setBatchReportServices} label="Default services for generated reports" />
+              <summary className="cursor-pointer text-sm font-semibold">Batch workflow options</summary>
+              <div className="mt-3 space-y-3">
+                <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={batchOptions.analyzeServicesIfMissing} onChange={() => setBatchOptions((current) => ({ ...current, analyzeServicesIfMissing: !current.analyzeServicesIfMissing }))} /> Analyze services if missing</label>
+                <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={batchOptions.generateReport} onChange={() => setBatchOptions((current) => ({ ...current, generateReport: !current.generateReport }))} /> Generate PDF reports</label>
+                <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={batchOptions.generateEmail} onChange={() => setBatchOptions((current) => ({ ...current, generateEmail: !current.generateEmail }))} /> Generate matching emails</label>
+                <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={batchOptions.runQualityGate} onChange={() => setBatchOptions((current) => ({ ...current, runQualityGate: !current.runQualityGate }))} /> Run quality gate</label>
+                <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={batchOptions.includeAttachmentWhenSending} onChange={() => setBatchOptions((current) => ({ ...current, includeAttachmentWhenSending: !current.includeAttachmentWhenSending }))} /> Attach approved PDFs when sending</label>
+                <label className="flex items-center gap-3 text-sm">
+                  <span className="font-medium">Concurrent leads</span>
+                  <Input type="number" min="1" max="12" value={batchConcurrency} onChange={(event) => setBatchConcurrency(event.target.value)} className="w-24" />
+                </label>
+                <ReportServiceSelector value={batchReportServices} onChange={setBatchReportServices} label="Fallback services when no analyzed services are saved yet" />
               </div>
             </details>
           </div>
@@ -782,6 +1263,9 @@ export default function OutreachPage() {
             {visibleLeads.map((lead) => {
               const state = pipelineState(lead);
               const leadReport = lead.auditReports?.[0] || null;
+              const topServices = selectedServiceLabelsForLead(lead).slice(0, 3);
+              const progressState = batchLeadProgress[lead.id];
+              const progressLabel = overallLeadBatchStage(progressState);
               return (
                 <div ref={(node) => { if (node) leadRefs.current[lead.id] = node; }} key={lead.id} className={`rounded-2xl border p-3 transition ${selectedLead?.id === lead.id ? "border-slate-950 bg-slate-50 dark:border-white dark:bg-slate-800/80" : "border-slate-200 bg-white hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:hover:bg-slate-800"}`}>
                   <div className="flex gap-3">
@@ -795,13 +1279,27 @@ export default function OutreachPage() {
                         <Badge className={priorities[lead.priority]?.className}>{priorities[lead.priority]?.label}</Badge>
                       </div>
                       <p className={`mt-2 truncate text-sm ${textMuted}`}>{lead.industryRef?.name || lead.industry || "No industry"}</p>
+                      <p className={`mt-2 truncate text-sm ${textMuted}`}>
+                        Services: {topServices.length ? topServices.join(", ") : lead.serviceAnalysisStatus === "failed" ? "analysis failed" : lead.serviceAnalysisStatus === "analyzing" ? "analyzing..." : "not analyzed"}
+                      </p>
                       <div className="mt-3 flex flex-wrap gap-2">
+                        {progressLabel ? (
+                          <Badge className={progressState?.status === "failed" ? "bg-rose-100 text-rose-800 ring-rose-200 dark:bg-rose-950/60 dark:text-rose-100 dark:ring-rose-800" : progressState?.status === "completed" ? "bg-emerald-100 text-emerald-800 ring-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-100 dark:ring-emerald-800" : "bg-blue-100 text-blue-800 ring-blue-200 dark:bg-blue-950/60 dark:text-blue-100 dark:ring-blue-800"}>
+                            {progressLabel}
+                          </Badge>
+                        ) : null}
                         {statusBadge(state.status)}
                         {state.qualityScore && <Badge className="bg-white text-slate-700 ring-slate-200 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700">Q {state.qualityScore}/10</Badge>}
+                        <Badge className={lead.serviceAnalysisStatus === "completed" ? "bg-emerald-100 text-emerald-800 ring-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-100 dark:ring-emerald-800" : lead.serviceAnalysisStatus === "failed" ? "bg-rose-100 text-rose-800 ring-rose-200 dark:bg-rose-950/60 dark:text-rose-100 dark:ring-rose-800" : "bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700"}>
+                          Services: {lead.serviceAnalysisStatus || "not_started"}
+                        </Badge>
                         <Badge className={leadReport?.status === "approved" || leadReport?.status === "attached" || leadReport?.status === "sent" ? "bg-emerald-100 text-emerald-800 ring-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-100 dark:ring-emerald-800" : leadReport?.status === "failed" || leadReport?.status === "failed_quality_gate" ? "bg-rose-100 text-rose-800 ring-rose-200 dark:bg-rose-950/60 dark:text-rose-100 dark:ring-rose-800" : "bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700"}>
                           Report: {leadReport?.status || "missing"}
                         </Badge>
+                        {progressState?.reportStatus === "running" ? <Badge className="bg-indigo-100 text-indigo-800 ring-indigo-200 dark:bg-indigo-950/60 dark:text-indigo-100 dark:ring-indigo-800">Generating PDF</Badge> : null}
+                        {progressState?.emailStatus === "running" ? <Badge className="bg-cyan-100 text-cyan-800 ring-cyan-200 dark:bg-cyan-950/60 dark:text-cyan-100 dark:ring-cyan-800">Generating Email</Badge> : null}
                       </div>
+                      {progressState?.status === "failed" && progressState?.error ? <p className="mt-2 text-xs text-rose-600 dark:text-rose-300">{progressState.error}</p> : null}
                     </button>
                   </div>
                 </div>
@@ -848,7 +1346,7 @@ export default function OutreachPage() {
           </Panel>
 
           <details className={`${card} p-5`}>
-            <summary className="cursor-pointer text-lg font-semibold">Selected observation</summary>
+            <summary className="cursor-pointer text-lg font-semibold">Email basis</summary>
             <div className="mt-4">
               {observation ? (
                 <div className="space-y-3">
@@ -859,7 +1357,7 @@ export default function OutreachPage() {
                   <h3 className="font-semibold">{observation.title || observation.expected}</h3>
                   <p className={`text-sm leading-6 ${textMuted}`}>{observation.description || observation.reasoning || observation.actual}</p>
                 </div>
-              ) : <p className={`text-sm ${textMuted}`}>No selected observation yet.</p>}
+              ) : <p className={`text-sm ${textMuted}`}>This email is being generated from the analyzed services and selected report focus.</p>}
             </div>
           </details>
 
@@ -869,9 +1367,20 @@ export default function OutreachPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   {qualityGate.approved ? <CheckCircle className="text-emerald-600 dark:text-emerald-300" size={18} /> : <XCircle className="text-rose-600 dark:text-rose-300" size={18} />}
                   <span className="font-semibold">{qualityGate.approved ? "Approved" : "Rejected"}</span>
-                  <Badge className={qualityGate.approved ? workflowClasses.APPROVED : workflowClasses.REJECTED}>Quality {qualityGate.qualityScore}/10</Badge>
+                  {Number.isFinite(Number(qualityGate.qualityScore)) ? <Badge className={qualityGate.approved ? workflowClasses.APPROVED : workflowClasses.REJECTED}>Quality {qualityGate.qualityScore}/10</Badge> : null}
                 </div>
                 <p className={`text-sm leading-6 ${textMuted}`}>{qualityGate.reason}</p>
+                {previewQualityGate ? (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Live preview</p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <Badge className={previewQualityGate.approved ? workflowClasses.APPROVED : workflowClasses.REJECTED}>
+                        {previewQualityGate.approved ? "Would pass" : "Would fail"} · {previewQualityGate.qualityScore}/10
+                      </Badge>
+                    </div>
+                    <p className={`mt-2 text-sm leading-6 ${textMuted}`}>{previewQualityGate.reason}</p>
+                  </div>
+                ) : null}
               </div>
             ) : <p className={`text-sm ${textMuted}`}>Quality Gate has not run for this lead yet.</p>}
           </Panel>
@@ -886,7 +1395,7 @@ export default function OutreachPage() {
                 {report?.confidenceScore != null && <Badge className="bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700">Confidence {report.confidenceScore}/100</Badge>}
               </div>
               <p className={`text-sm leading-6 ${textMuted}`}>{report?.summary || "Generate a website opportunity report to attach something concrete and useful with the outreach email."}</p>
-              <ReportServiceSelector value={reportServices} onChange={setReportServices} analysisTarget={selectedLead} />
+              <ReportServiceSelector value={reportServices} onChange={changeSelectedLeadServices} analysisTarget={selectedLead} onAnalyze={() => selectedLead && analyzeServicesForLead(selectedLead)} />
               <div className="flex flex-wrap gap-2">
                 {reportServices.map((serviceId) => (
                   <Badge key={serviceId} className="bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700">{serviceLabelsById[serviceId] || serviceId}</Badge>
@@ -1007,6 +1516,17 @@ export default function OutreachPage() {
                 <Button variant="secondary" disabled={!selectedLead || Boolean(runningLeadId)} onClick={() => runPipeline()}><RefreshCw size={16} /> Regenerate</Button>
                 <Button disabled={sending || !gmailReady || !draft.subject || !draft.body || emailServiceMismatch || (reportServiceMismatch && includeReport)} onClick={sendEmail}><Send size={16} /> {currentState.status === "APPROVED" ? "Send" : "Send Anyway"}</Button>
               </div>
+              {singleSendProgress ? (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-medium text-slate-700 dark:text-slate-200">{singleSendProgress.label}</p>
+                    <span className={`text-xs font-semibold ${singleSendProgress.error ? "text-rose-600 dark:text-rose-300" : "text-slate-500 dark:text-slate-400"}`}>{singleSendProgress.percent}%</span>
+                  </div>
+                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+                    <div className={`h-full transition-all ${singleSendProgress.error ? "bg-rose-500" : "bg-slate-950 dark:bg-white"}`} style={{ width: `${singleSendProgress.percent || 0}%` }} />
+                  </div>
+                </div>
+              ) : null}
               {emailServiceMismatch || (reportServiceMismatch && includeReport) ? (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
                   {emailServiceMismatch

@@ -229,7 +229,7 @@ router.post(
     parse: (value) =>
       z.object({
         body: z.object({
-          selectedObservation: emailWriterObservation,
+          selectedObservation: emailWriterObservation.optional(),
           company: z.object({
             name: z.string().optional(),
             website: z.string().optional()
@@ -239,6 +239,20 @@ router.post(
           businessUnderstanding: z.any().optional(),
           phase1: z.any().optional(),
           lead: z.any().optional(),
+          reportContext: z.object({
+            selectedServices: z.array(z.union([
+              z.string(),
+              z.object({
+                id: z.string(),
+                label: z.string().optional(),
+                description: z.string().optional()
+              })
+            ])).optional(),
+            reportSummary: z.string().optional(),
+            topServiceProblems: z.array(z.string()).optional(),
+            topServiceRecommendations: z.array(z.string()).optional(),
+            attachmentEnabled: z.boolean().optional()
+          }).optional(),
           contact: z.object({
             firstName: z.string().optional()
           }).optional(),
@@ -295,6 +309,32 @@ router.post(
   asyncHandler(emailQualityGateController.build)
 );
 router.post(
+  "/pipeline/analyze-services",
+  validate({
+    parse: (value) =>
+      z.object({
+        body: z.object({
+          leadId: z.string().min(1),
+          force: z.boolean().optional()
+        })
+      }).parse(value)
+  }),
+  asyncHandler(outreachPipelineController.analyzeServices)
+);
+router.put(
+  "/pipeline/services/:leadId",
+  validate({
+    parse: (value) =>
+      z.object({
+        params: z.object({ leadId: z.string().min(1) }),
+        body: z.object({
+          selectedReportServices: z.array(z.string()).min(1)
+        })
+      }).parse(value)
+  }),
+  asyncHandler(outreachPipelineController.updateSelectedServices)
+);
+router.post(
   "/pipeline",
   validate({
     parse: (value) =>
@@ -324,7 +364,10 @@ router.post(
             title: z.string().optional(),
             company: z.string().optional()
           }).optional(),
-          selectedServices: z.array(z.string()).optional()
+          selectedServices: z.array(z.string()).optional(),
+          attachmentEnabled: z.boolean().optional(),
+          analyzeServicesIfMissing: z.boolean().optional(),
+          generateReport: z.boolean().optional()
         })
       }).parse(value)
   }),

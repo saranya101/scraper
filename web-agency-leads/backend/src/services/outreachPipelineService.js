@@ -11,6 +11,7 @@ import { filterOwnerInterest } from "./ownerInterestService.js";
 import { buildStructuredEvidenceForLead } from "./structuredEvidenceService.js";
 import { buildWebsiteBlueprint } from "./websiteBlueprintService.js";
 import { generateReport } from "./reportService.js";
+import { generateForLead as generateServiceOpportunities } from "./serviceOpportunityService.js";
 
 function clean(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -18,6 +19,10 @@ function clean(value) {
 
 function array(value) {
   return Array.isArray(value) ? value : [];
+}
+
+function object(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
 function pickObservations(input = {}) {
@@ -39,6 +44,70 @@ function normalizeSelectedServices(input = [], fallback = DEFAULT_REPORT_SERVICE
   return (ids.length ? ids : fallback)
     .map((id) => REPORT_SERVICE_MAP.get(id))
     .filter(Boolean);
+}
+
+function reportServiceIdFromOpportunity(opportunity = {}) {
+  const slug = String(opportunity.service?.slug || opportunity.slug || "").trim().toLowerCase();
+  const name = String(opportunity.service?.name || opportunity.name || "").trim().toLowerCase();
+  const direct = slug.replace(/-/g, "_");
+  if (REPORT_SERVICE_MAP.has(direct)) return direct;
+
+  const mappings = [
+    [/landing-page/, "lead_generation"],
+    [/local-seo/, "google_business_profile"],
+    [/branding/, "branding_positioning"],
+    [/booking-system/, "appointment_booking"],
+    [/automation/, "whatsapp_automation"],
+    [/analytics/, "conversion_rate_optimisation"],
+    [/maintenance/, "website_redesign"],
+    [/ecommerce/, "ecommerce_improvement"]
+  ];
+  for (const [pattern, id] of mappings) {
+    if (pattern.test(slug) || pattern.test(name)) return id;
+  }
+  return null;
+}
+
+function autoSelectReportServices(analyzedServices = []) {
+  const sorted = array(analyzedServices)
+    .filter((item) => REPORT_SERVICE_MAP.has(item.serviceId))
+    .sort((left, right) => Number(right.fitScore || 0) - Number(left.fitScore || 0));
+  const primary = sorted.filter((item) => Number(item.fitScore || 0) >= 25).slice(0, 3);
+  const fallback = sorted.slice(0, 2);
+  const selected = (primary.length >= 2 ? primary : fallback).slice(0, 4);
+  return [...new Set(selected.map((item) => item.serviceId).filter(Boolean))];
+}
+
+function leadServiceAnalysis(lead) {
+  return object(leadScanEvidence(lead).serviceAnalysis);
+}
+
+function selectedServicesForLead(lead, override = []) {
+  const analysis = leadServiceAnalysis(lead);
+  const selected = array(override).length
+    ? override
+    : array(analysis.selectedReportServices).length
+      ? analysis.selectedReportServices
+      : array(leadScanEvidence(lead).outreachPipeline?.selectedReportServices);
+  return normalizeSelectedServices(selected);
+}
+
+async function persistServiceAnalysis(leadId, updater) {
+  const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { id: true, scanEvidence: true } });
+  if (!lead) throw notFound("Lead not found");
+  const currentEvidence = leadScanEvidence(lead);
+  const currentAnalysis = object(currentEvidence.serviceAnalysis);
+  const nextAnalysis = typeof updater === "function" ? updater(currentAnalysis) : updater;
+  await prisma.lead.update({
+    where: { id: leadId },
+    data: {
+      scanEvidence: {
+        ...currentEvidence,
+        serviceAnalysis: nextAnalysis
+      }
+    }
+  });
+  return nextAnalysis;
 }
 
 function topServiceProblemsFromPayload(payload = {}) {
@@ -85,11 +154,13 @@ function contextFrom(input, lead, phase1) {
   const selectedServices = normalizeSelectedServices(
     Array.isArray(input.selectedServices) && input.selectedServices.length
       ? input.selectedServices
-      : Array.isArray(report?.selectedServices) && report.selectedServices.length
-        ? report.selectedServices
-        : Array.isArray(payload.selectedServices) && payload.selectedServices.length
-          ? payload.selectedServices
-          : DEFAULT_REPORT_SERVICE_IDS
+      : selectedServicesForLead(lead).length
+        ? selectedServicesForLead(lead).map((item) => item.id)
+        : Array.isArray(report?.selectedServices) && report.selectedServices.length
+          ? report.selectedServices
+          : Array.isArray(payload.selectedServices) && payload.selectedServices.length
+            ? payload.selectedServices
+            : DEFAULT_REPORT_SERVICE_IDS
   );
   return {
     company: {
@@ -104,7 +175,7 @@ function contextFrom(input, lead, phase1) {
           reportSummary: clean(report?.summary || payload.executiveSummary || ""),
           topServiceProblems: topServiceProblemsFromPayload(payload),
           topServiceRecommendations: topServiceRecommendationsFromPayload(payload),
-          attachmentEnabled: true
+          attachmentEnabled: input.attachmentEnabled !== false
         }
       : null
   };
@@ -255,6 +326,10 @@ function pipelineStateFromResult(result, userId) {
     observationCategory: result?.selectedObservation?.category || null,
     reportStatus: result?.report?.status || result?.reportStatus || null,
     emailSelectedServices: array(result?.emailSelectedServices || result?.email?.emailSelectedServices),
+    analyzedServices: array(result?.analyzedServices),
+    selectedReportServices: array(result?.selectedReportServices || result?.emailSelectedServices || result?.email?.emailSelectedServices),
+    selectedServicesSource: result?.selectedServicesSource || null,
+    serviceAnalysisStatus: result?.serviceAnalysisStatus || null,
     lastRunAt: new Date().toISOString(),
     updatedBy: userId || null
   };
@@ -333,6 +408,12 @@ function candidateDiagnostics(result) {
   };
 }
 
+function serviceSelectionReason(selectedServices = [], source = "auto") {
+  const labels = normalizeSelectedServices(selectedServices, []).map((item) => item.label);
+  const focus = labels.length ? labels.join(", ") : "selected services";
+  return `Generated from analyzed services${source === "manual" ? " using the manually selected service focus" : ""}: ${focus}.`;
+}
+
 async function writeAndGate({ selectedObservation, context, sender, contact, retry = null, caution = null }) {
   const email = await writeEmail({
     selectedObservation,
@@ -354,6 +435,56 @@ async function writeAndGate({ selectedObservation, context, sender, contact, ret
     reportContext: context.reportContext
   });
   return { email, qualityGate };
+}
+
+async function evaluateServiceBasedDraft({ context, sender, contact }) {
+  const firstAttempt = await writeAndGate({ selectedObservation: null, context, sender, contact });
+  if (firstAttempt.qualityGate.approved) {
+    return {
+      status: "approved",
+      selectedObservationId: null,
+      selectedObservation: null,
+      firstEmail: firstAttempt.email,
+      firstQualityGate: firstAttempt.qualityGate,
+      email: firstAttempt.email,
+      qualityGate: firstAttempt.qualityGate
+    };
+  }
+
+  const secondAttempt = await writeAndGate({
+    selectedObservation: null,
+    context,
+    sender,
+    contact,
+    retry: firstAttempt.qualityGate
+  });
+
+  if (secondAttempt.qualityGate.approved) {
+    return {
+      status: "approved",
+      selectedObservationId: null,
+      selectedObservation: null,
+      firstEmail: firstAttempt.email,
+      rewriteEmail: secondAttempt.email,
+      secondQualityGate: secondAttempt.qualityGate,
+      email: secondAttempt.email,
+      qualityGate: secondAttempt.qualityGate,
+      firstQualityGate: firstAttempt.qualityGate
+    };
+  }
+
+  return {
+    status: "rejected",
+    selectedObservationId: null,
+    selectedObservation: null,
+    firstEmail: firstAttempt.email,
+    rewriteEmail: secondAttempt.email,
+    secondQualityGate: secondAttempt.qualityGate,
+    email: secondAttempt.email,
+    qualityGate: secondAttempt.qualityGate,
+    firstQualityGate: firstAttempt.qualityGate,
+    reason: secondAttempt.qualityGate.reason || firstAttempt.qualityGate.reason || "Service-based email did not pass the quality gate."
+  };
 }
 
 async function evaluateCandidate({ candidate, context, sender, contact }) {
@@ -442,14 +573,20 @@ function rejectedPipelineResult(bestResult, scoring, conversationQuality, ownerI
       evaluatedCandidates,
       summary: diagnosticSummary(evaluatedCandidates, candidates.length),
       ...details
-    }
+    },
+    analyzedServices: array(details.analyzedServices),
+    selectedReportServices: array(details.selectedReportServices),
+    selectedServicesSource: details.selectedServicesSource || "auto",
+    serviceAnalysisStatus: details.serviceAnalysisStatus || "completed"
   };
 }
 
 async function attachReportIfEligible(result, input, userId) {
-  if (!["approved", "rejected"].includes(result?.status) || !input?.leadId) return result;
+  if (!["approved", "rejected"].includes(result?.status) || !input?.leadId || input?.generateReport === false) return result;
   try {
-    const report = await generateReport(input.leadId, userId, { selectedServices: input.selectedServices });
+    const report = await generateReport(input.leadId, userId, {
+      selectedServices: array(result?.selectedReportServices).length ? result.selectedReportServices : input.selectedServices
+    });
     return {
       ...result,
       report,
@@ -465,12 +602,130 @@ async function attachReportIfEligible(result, input, userId) {
   }
 }
 
+export async function analyzeLeadServices(leadId, { force = false } = {}) {
+  if (!leadId) throw new HttpError(422, "Lead is required");
+  const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { id: true, scanEvidence: true } });
+  if (!lead) throw notFound("Lead not found");
+  const existing = leadServiceAnalysis(lead);
+  if (!force && existing.status === "completed" && array(existing.analyzedServices).length) {
+    return existing;
+  }
+
+  await persistServiceAnalysis(leadId, (current) => ({
+    ...current,
+    status: "analyzing",
+    error: null
+  }));
+
+  try {
+    const opportunities = await generateServiceOpportunities(leadId);
+    const analyzedServices = opportunities
+      .map((item) => {
+        const serviceId = reportServiceIdFromOpportunity(item);
+        if (!serviceId) return null;
+        return {
+          serviceId,
+          serviceLabel: REPORT_SERVICE_MAP.get(serviceId)?.label || item.service?.name || serviceId,
+          fitScore: Math.max(0, Math.min(100, Number(item.score || 0) * 10)),
+          reason: item.reason || "",
+          sourceService: item.service?.name || ""
+        };
+      })
+      .filter(Boolean)
+      .sort((left, right) => Number(right.fitScore || 0) - Number(left.fitScore || 0));
+    const selectedReportServices = autoSelectReportServices(analyzedServices);
+    if (!analyzedServices.length || !selectedReportServices.length) {
+      throw new Error("Service analysis did not produce any compatible report services");
+    }
+    return await persistServiceAnalysis(leadId, (current) => ({
+      ...current,
+      status: "completed",
+      error: null,
+      analyzedAt: new Date().toISOString(),
+      analyzedServices,
+      selectedReportServices,
+      selectedServicesSource: current.selectedServicesSource === "manual" && array(current.selectedReportServices).length
+        ? "manual"
+        : "auto"
+    }));
+  } catch (error) {
+    return await persistServiceAnalysis(leadId, (current) => ({
+      ...current,
+      status: "failed",
+      error: error?.message || "Service analysis failed",
+      analyzedAt: new Date().toISOString()
+    }));
+  }
+}
+
+export async function updateLeadSelectedServices(leadId, selectedReportServices = [], { source = "manual" } = {}) {
+  if (!leadId) throw new HttpError(422, "Lead is required");
+  const normalized = normalizeSelectedServices(selectedReportServices, []).map((item) => item.id);
+  if (!normalized.length) throw new HttpError(422, "Select at least one service");
+  return persistServiceAnalysis(leadId, (current) => ({
+    ...current,
+    status: current.status || "completed",
+    error: null,
+    analyzedAt: current.analyzedAt || new Date().toISOString(),
+    analyzedServices: array(current.analyzedServices),
+    selectedReportServices: normalized,
+    selectedServicesSource: source
+  }));
+}
+
 export async function runOutreachPipeline(input = {}, { userId } = {}) {
   const lead = await getLead(input.leadId);
+  const serviceAnalysis = input.analyzeServicesIfMissing === false
+    ? leadServiceAnalysis(lead)
+    : await analyzeLeadServices(input.leadId, { force: false });
+  if (serviceAnalysis.status === "failed") {
+    return persistPipelineResult(input.leadId, {
+      status: "rejected",
+      selectionReason: "Service analysis failed before the outreach pipeline could run.",
+      reason: serviceAnalysis.error || "Service analysis failed",
+      analyzedServices: array(serviceAnalysis.analyzedServices),
+      selectedReportServices: array(serviceAnalysis.selectedReportServices),
+      selectedServicesSource: serviceAnalysis.selectedServicesSource || "auto",
+      serviceAnalysisStatus: serviceAnalysis.status
+    }, userId);
+  }
+  const selectedServices = normalizeSelectedServices(
+    array(input.selectedServices).length ? input.selectedServices : array(serviceAnalysis.selectedReportServices)
+  );
+  const selectedServiceIds = selectedServices.map((item) => item.id);
   const sender = await defaultSender(input, userId);
   const contact = input.contact || {};
   const phase1 = await phase1For(input, lead);
   if (!phase1) return persistPipelineResult(input.leadId, noSuitableAngle("Phase 1 could not identify the business confidently enough for outreach."), userId);
+
+  const context = contextFrom({ ...input, selectedServices: selectedServiceIds }, lead, phase1);
+  if (!selectedServiceIds.length) {
+    return persistPipelineResult(input.leadId, noSuitableAngle("No analyzed services were available for this lead."), userId);
+  }
+
+  const serviceDraft = await evaluateServiceBasedDraft({ context, sender, contact });
+  const serviceBasedResult = {
+    status: serviceDraft.status,
+    selectedObservationId: null,
+    selectedObservation: null,
+    selectionReason: serviceSelectionReason(selectedServiceIds, serviceAnalysis.selectedServicesSource || "auto"),
+    email: serviceDraft.email,
+    emailSelectedServices: selectedServiceIds,
+    analyzedServices: array(serviceAnalysis.analyzedServices),
+    selectedReportServices: selectedServiceIds,
+    selectedServicesSource: serviceAnalysis.selectedServicesSource || "auto",
+    serviceAnalysisStatus: serviceAnalysis.status || "completed",
+    qualityGate: serviceDraft.qualityGate,
+    firstQualityGate: serviceDraft.firstQualityGate || null,
+    reason: serviceDraft.reason || serviceDraft.qualityGate?.reason || "",
+    debug: {
+      mode: "service_analysis",
+      evaluatedCandidates: [candidateDiagnostics(serviceDraft)],
+      summary: diagnosticSummary([candidateDiagnostics(serviceDraft)], 1)
+    }
+  };
+  const withReport = await attachReportIfEligible(serviceBasedResult, { ...input, selectedServices: selectedServiceIds }, userId);
+  return persistPipelineResult(input.leadId, withReport, userId);
 
   const phase4Observations = await phase4For(input, lead, phase1);
   if (!phase4Observations.length) return persistPipelineResult(input.leadId, noSuitableAngle("No Phase 4 observations were available for this lead."), userId);
@@ -496,7 +751,6 @@ export async function runOutreachPipeline(input = {}, { userId } = {}) {
     }), userId);
   }
 
-  const context = contextFrom(input, lead, phase1);
   const evaluatedCandidates = [];
   const evaluatedResults = [];
 
@@ -511,7 +765,11 @@ export async function runOutreachPipeline(input = {}, { userId } = {}) {
         selectedObservation: result.selectedObservation,
         selectionReason: selectionReason(result.selectedObservation, scoring, conversationQuality, ownerInterest),
         email: result.email,
-        emailSelectedServices: result.email?.emailSelectedServices || [],
+        emailSelectedServices: selectedServiceIds,
+        analyzedServices: array(serviceAnalysis.analyzedServices),
+        selectedReportServices: selectedServiceIds,
+        selectedServicesSource: serviceAnalysis.selectedServicesSource || "auto",
+        serviceAnalysisStatus: serviceAnalysis.status || "completed",
         qualityGate: result.qualityGate,
         firstQualityGate: result.firstQualityGate,
         debug: {
@@ -519,7 +777,7 @@ export async function runOutreachPipeline(input = {}, { userId } = {}) {
           summary: diagnosticSummary(evaluatedCandidates, candidates.length),
           usedFallbackCandidates
         }
-      }, input, userId);
+      }, { ...input, selectedServices: selectedServiceIds }, userId);
       return persistPipelineResult(input.leadId, approvedResult, userId);
     }
   }
@@ -540,9 +798,16 @@ export async function runOutreachPipeline(input = {}, { userId } = {}) {
         candidateCount: candidates.length,
         skippedLowConfidence: evaluatedCandidates.filter((item) => item.status === "skipped_low_confidence").length,
         rejectedByQualityGate: evaluatedCandidates.filter((item) => item.status === "rejected").length,
-        usedFallbackCandidates
+        usedFallbackCandidates,
+        analyzedServices: array(serviceAnalysis.analyzedServices),
+        selectedReportServices: selectedServiceIds,
+        selectedServicesSource: serviceAnalysis.selectedServicesSource || "auto",
+        serviceAnalysisStatus: serviceAnalysis.status || "completed"
       }
-    ), input, userId);
+    ), {
+      ...input,
+      selectedServices: selectedServiceIds
+    }, userId);
     return persistPipelineResult(input.leadId, rejectedResult, userId);
   }
 
@@ -626,12 +891,21 @@ export async function savePipelineDraft(leadId, draft = {}) {
       body: cleanDraft.fullEmail || cleanDraft.body,
       wordCount: cleanDraft.fullEmail ? cleanDraft.fullEmail.split(/\s+/).filter(Boolean).length : cleanDraft.body.split(/\s+/).filter(Boolean).length
     },
-    emailSelectedServices: array(draft.emailSelectedServices || current.emailSelectedServices)
+    emailSelectedServices: array(draft.emailSelectedServices || current.emailSelectedServices),
+    selectedReportServices: array(draft.emailSelectedServices || current.selectedReportServices || current.emailSelectedServices)
   };
   const updated = await prisma.lead.update({
     where: { id: leadId },
     data: {
-      scanEvidence: { ...scanEvidence, outreachPipeline: next },
+      scanEvidence: {
+        ...scanEvidence,
+        outreachPipeline: next,
+        serviceAnalysis: {
+          ...object(scanEvidence.serviceAnalysis),
+          selectedReportServices: array(draft.emailSelectedServices || current.selectedReportServices || current.emailSelectedServices),
+          selectedServicesSource: array(draft.emailSelectedServices).length ? "manual" : object(scanEvidence.serviceAnalysis).selectedServicesSource || "auto"
+        }
+      },
       outreachEmail: cleanDraft.fullEmail || cleanDraft.body || null
     }
   });

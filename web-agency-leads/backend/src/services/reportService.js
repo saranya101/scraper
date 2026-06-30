@@ -1165,6 +1165,11 @@ export async function approveReport(leadId, userId) {
   });
   if (!report) throw notFound("Report not found");
   if (!report.qualityGate?.passed) throw new HttpError(422, "This report has not passed the quality gate yet.");
+  const filePath = report.pdfPath || (report.pdfUrl ? absoluteUploadPath(report.pdfUrl) : null);
+  if (!filePath) throw new HttpError(422, "Report file is missing.");
+  await fs.access(filePath).catch(() => {
+    throw new HttpError(422, "Report file is missing.");
+  });
   const updated = await prisma.auditReport.update({
     where: { id: report.id },
     data: {

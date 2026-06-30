@@ -471,6 +471,14 @@ export async function sendEmail(userId, input = {}) {
   if (!lead) throw notFound("Lead not found");
   if (!user) throw notFound("User not found");
   if (input.outreachDraftId && (!draft || draft.leadId !== leadId)) throw notFound("Outreach draft not found");
+  const scanEvidence = lead.scanEvidence && typeof lead.scanEvidence === "object" && !Array.isArray(lead.scanEvidence) ? lead.scanEvidence : {};
+  const pipelineState = scanEvidence.outreachPipeline && typeof scanEvidence.outreachPipeline === "object" ? scanEvidence.outreachPipeline : {};
+  const qualityGate = pipelineState.qualityGate && typeof pipelineState.qualityGate === "object" ? pipelineState.qualityGate : null;
+  const selectedReportServices = Array.isArray(pipelineState.selectedReportServices) ? pipelineState.selectedReportServices : [];
+  if (!qualityGate?.approved) throw new HttpError(422, "Email quality gate has not been approved for this lead.");
+  if (Array.isArray(input.emailSelectedServices) && input.emailSelectedServices.length && selectedReportServices.length && !sameServiceSelection(input.emailSelectedServices, selectedReportServices)) {
+    throw new HttpError(422, "Email does not match the selected report services. Regenerate email before sending.");
+  }
   const cooldown = await cooldownDays();
   if (!input.ignoreCooldown && lead.lastEmailSentAt && Date.now() - lead.lastEmailSentAt.getTime() < cooldown * 24 * 60 * 60 * 1000) {
     throw new HttpError(409, `Lead was contacted recently. Cooldown is ${cooldown} days.`);

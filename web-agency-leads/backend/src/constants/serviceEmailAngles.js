@@ -2,7 +2,7 @@ export const SERVICE_EMAIL_ANGLES = {
   website_redesign: {
     phrase: "website clarity",
     improvementPhrase: "homepage structure, messaging, trust signals, and CTA placement",
-    quickWins: ["make the main value proposition and enquiry CTA more visible above the fold"],
+    quickWins: ["make the main offer and enquiry CTA more visible above the fold"],
     observation: "the homepage does not make the main offer and next step immediately obvious",
     outcome: "understand the service quickly and know what to do next"
   },
@@ -36,8 +36,8 @@ export const SERVICE_EMAIL_ANGLES = {
   },
   appointment_booking: {
     phrase: "appointment booking",
-    improvementPhrase: "booking flow, calendar access, and reminder support",
-    quickWins: ["add a direct booking route with clear calendar slots and reminder support"],
+    improvementPhrase: "booking flow, available times, and reminder support",
+    quickWins: ["add a direct booking route with clear available times and reminder support"],
     observation: "the booking path could be more direct for people ready to schedule",
     outcome: "book while they are still interested"
   },
@@ -50,7 +50,7 @@ export const SERVICE_EMAIL_ANGLES = {
   },
   branding_positioning: {
     phrase: "positioning clarity",
-    improvementPhrase: "value proposition, differentiation, and proof points",
+    improvementPhrase: "main promise, differentiation, and proof points",
     quickWins: ["clarify the main promise and strongest differentiators in the first screen"],
     observation: "the site could explain the strongest offer and differentiators more clearly",
     outcome: "understand why this business is the right fit"

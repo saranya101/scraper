@@ -179,7 +179,6 @@ function questionIsNatural(body) {
 
 function soundsHuman(body) {
   const lower = body.toLowerCase();
-  if (/\bai\b/i.test(body)) return false;
   if (includesAny(lower, forbiddenPhrases.filter((phrase) => phrase !== "ai"))) return false;
   if (/(unlock|transform|elevate|leverage|streamline|cutting-edge|game-changing)/i.test(body)) return false;
   return true;
@@ -309,6 +308,13 @@ export function evaluateEmailQuality(input = {}) {
     "appointment",
     "trust",
     "pricing",
+    "search",
+    "booking",
+    "question",
+    "questions",
+    "reply",
+    "follow-up",
+    "contact",
     "first-time visitor",
     "ready to act",
     "remember",
@@ -331,7 +337,6 @@ export function evaluateEmailQuality(input = {}) {
 const forbiddenPhrases = [
   "audit",
   "analysis",
-  "ai",
   "artificial intelligence",
   "consultant",
   "consulting",
@@ -341,7 +346,6 @@ const forbiddenPhrases = [
   "value proposition",
   "marketing",
   "meeting",
-  "calendar",
   "schedule a call",
   "book a call",
   "demo",

@@ -9,7 +9,6 @@ const bannedPhrases = [
   "analysis",
   "analyzed",
   "analysed",
-  "ai",
   "artificial intelligence",
   "ux",
   "user experience",
@@ -21,7 +20,6 @@ const bannedPhrases = [
   "recommendation",
   "synergy",
   "growth hack",
-  "calendar",
   "meeting",
   "book a call",
   "schedule a call",
@@ -509,6 +507,23 @@ function cleanEmailBody(value) {
     .trim();
 }
 
+function bannedLanguageMatches(value) {
+  const source = String(value || "");
+  const text = clean(source).toLowerCase();
+  const hits = [];
+  if (placeholderPattern.test(source)) hits.push("placeholder");
+  if (bannedOpeners.test(cleanEmailBody(source))) hits.push("banned_opener");
+  if (technicalObservationWarning(source)) hits.push("technical_observation");
+  for (const phrase of bannedPhrases) {
+    if (phrase === "ai") {
+      if (/\bai\b/i.test(source)) hits.push("ai");
+      continue;
+    }
+    if (text.includes(phrase)) hits.push(phrase);
+  }
+  return [...new Set(hits)];
+}
+
 function insertLengthGuardSentence(body, sentence) {
   const cleanBody = cleanEmailBody(body);
   const cleanSentence = clean(sentence);
@@ -576,14 +591,7 @@ function ensureMaximumEmailLength(email, input, source) {
 }
 
 function hasBannedLanguage(value) {
-  const text = clean(value).toLowerCase();
-  if (placeholderPattern.test(value)) return true;
-  if (bannedOpeners.test(cleanEmailBody(value))) return true;
-  if (technicalObservationWarning(value)) return true;
-  return bannedPhrases.some((phrase) => {
-    if (phrase === "ai") return /\bai\b/.test(text);
-    return text.includes(phrase);
-  });
+  return bannedLanguageMatches(value).length > 0;
 }
 
 function hasLabels(value) {
@@ -609,6 +617,7 @@ function validateEmail(email, observation, input = {}, source = "unknown") {
       withinWordLimit: wordLimit.withinWordLimit,
       subjectIsOnlyCompany,
       hasBannedLanguage: hasBannedLanguage(`${subject}\n${body}`),
+      bannedLanguageMatches: bannedLanguageMatches(`${subject}\n${body}`),
       hasLabels: hasLabels(body)
     }
   };

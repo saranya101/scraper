@@ -275,6 +275,17 @@ router.post(
           }).optional(),
           industry: z.string().optional(),
           businessType: z.string().optional(),
+          reportContext: z.object({
+            selectedServices: z.array(z.union([
+              z.string(),
+              z.object({
+                id: z.string(),
+                label: z.string().optional(),
+                description: z.string().optional()
+              })
+            ])).optional(),
+            attachmentEnabled: z.boolean().optional()
+          }).optional(),
           businessUnderstanding: z.any().optional(),
           phase1: z.any().optional(),
           lead: z.any().optional()

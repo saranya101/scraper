@@ -170,6 +170,31 @@ function candidateList(scoredObservations, conversationQuality, ownerInterest) {
     );
 }
 
+function fallbackCandidateList(scoredObservations, conversationQuality, ownerInterest) {
+  const qualityById = new Map(array(conversationQuality.conversationQuality).map((item) => [item.id, item]));
+  const interestById = new Map(array(ownerInterest.ownerInterest).map((item) => [item.id, item]));
+  return array(scoredObservations)
+    .map((observation) => {
+      const confidence = observationConfidence(observation);
+      return {
+        observation,
+        quality: qualityById.get(observation.id) || {},
+        interest: interestById.get(observation.id) || {},
+        confidence,
+        confidenceBand: confidenceBand(Math.max(confidence, 0.6)),
+        allowLowConfidence: true,
+        source: "fallback"
+      };
+    })
+    .sort((a, b) =>
+      Number(b.observation.scores?.overallScore || 0) - Number(a.observation.scores?.overallScore || 0) ||
+      Number(b.observation.scores?.conversationPotential || 0) - Number(a.observation.scores?.conversationPotential || 0) ||
+      Number(b.observation.scores?.businessImpact || 0) - Number(a.observation.scores?.businessImpact || 0) ||
+      b.confidence - a.confidence
+    )
+    .slice(0, 5);
+}
+
 function selectionReason(selected, scoring, conversationQuality, ownerInterest) {
   if (!selected) return "";
   const quality = array(conversationQuality.conversationQuality).find((item) => item.id === selected.id);
@@ -333,7 +358,7 @@ async function writeAndGate({ selectedObservation, context, sender, contact, ret
 
 async function evaluateCandidate({ candidate, context, sender, contact }) {
   const selectedObservation = candidate.observation;
-  if (candidate.confidenceBand === "low") {
+  if (candidate.confidenceBand === "low" && !candidate.allowLowConfidence) {
     return {
       status: "skipped_low_confidence",
       selectedObservationId: selectedObservation.id,
@@ -400,8 +425,29 @@ async function evaluateCandidate({ candidate, context, sender, contact }) {
   };
 }
 
-async function attachReportIfApproved(result, input, userId) {
-  if (result?.status !== "approved" || !input?.leadId) return result;
+function rejectedPipelineResult(bestResult, scoring, conversationQuality, ownerInterest, evaluatedCandidates, candidates, details = {}) {
+  return {
+    status: "rejected",
+    selectedObservationId: bestResult?.selectedObservationId || null,
+    selectedObservation: bestResult?.selectedObservation || null,
+    selectionReason: bestResult?.selectedObservation
+      ? selectionReason(bestResult.selectedObservation, scoring, conversationQuality, ownerInterest)
+      : "Automatic angle selection did not fully pass the quality gate, so the strongest draft was kept for review.",
+    email: bestResult?.email || bestResult?.rewriteEmail || bestResult?.firstEmail || null,
+    emailSelectedServices: bestResult?.email?.emailSelectedServices || bestResult?.rewriteEmail?.emailSelectedServices || bestResult?.firstEmail?.emailSelectedServices || [],
+    qualityGate: bestResult?.qualityGate || bestResult?.secondQualityGate || bestResult?.firstQualityGate || null,
+    firstQualityGate: bestResult?.firstQualityGate || null,
+    reason: "No candidate passed the automatic quality gate, so the strongest draft was kept for review instead of dropping to manual-only mode.",
+    debug: {
+      evaluatedCandidates,
+      summary: diagnosticSummary(evaluatedCandidates, candidates.length),
+      ...details
+    }
+  };
+}
+
+async function attachReportIfEligible(result, input, userId) {
+  if (!["approved", "rejected"].includes(result?.status) || !input?.leadId) return result;
   try {
     const report = await generateReport(input.leadId, userId, { selectedServices: input.selectedServices });
     return {
@@ -435,7 +481,12 @@ export async function runOutreachPipeline(input = {}, { userId } = {}) {
     conversationQuality,
     scoredObservations: scoring.scoredObservations
   });
-  const candidates = candidateList(scoring.scoredObservations, conversationQuality, ownerInterest);
+  let candidates = candidateList(scoring.scoredObservations, conversationQuality, ownerInterest);
+  let usedFallbackCandidates = false;
+  if (!candidates.length) {
+    candidates = fallbackCandidateList(scoring.scoredObservations, conversationQuality, ownerInterest);
+    usedFallbackCandidates = candidates.length > 0;
+  }
   if (!candidates.length) {
     return persistPipelineResult(input.leadId, noSuitableAngle("No suitable outreach angle found after Phase 6 and Phase 7 filtering.", {
       summary: diagnosticSummary([], 0),
@@ -447,12 +498,14 @@ export async function runOutreachPipeline(input = {}, { userId } = {}) {
 
   const context = contextFrom(input, lead, phase1);
   const evaluatedCandidates = [];
+  const evaluatedResults = [];
 
   for (const candidate of candidates) {
     const result = await evaluateCandidate({ candidate, context, sender, contact });
+    evaluatedResults.push(result);
     evaluatedCandidates.push(candidateDiagnostics(result));
     if (result.status === "approved") {
-      const approvedResult = await attachReportIfApproved({
+      const approvedResult = await attachReportIfEligible({
         status: "approved",
         selectedObservationId: result.selectedObservationId,
         selectedObservation: result.selectedObservation,
@@ -463,11 +516,34 @@ export async function runOutreachPipeline(input = {}, { userId } = {}) {
         firstQualityGate: result.firstQualityGate,
         debug: {
           evaluatedCandidates,
-          summary: diagnosticSummary(evaluatedCandidates, candidates.length)
+          summary: diagnosticSummary(evaluatedCandidates, candidates.length),
+          usedFallbackCandidates
         }
       }, input, userId);
       return persistPipelineResult(input.leadId, approvedResult, userId);
     }
+  }
+
+  const bestRejected = evaluatedResults.find((item) => item.status === "rejected")
+    || evaluatedResults.find((item) => item.email || item.firstEmail || item.rewriteEmail)
+    || null;
+
+  if (bestRejected) {
+    const rejectedResult = await attachReportIfEligible(rejectedPipelineResult(
+      bestRejected,
+      scoring,
+      conversationQuality,
+      ownerInterest,
+      evaluatedCandidates,
+      candidates,
+      {
+        candidateCount: candidates.length,
+        skippedLowConfidence: evaluatedCandidates.filter((item) => item.status === "skipped_low_confidence").length,
+        rejectedByQualityGate: evaluatedCandidates.filter((item) => item.status === "rejected").length,
+        usedFallbackCandidates
+      }
+    ), input, userId);
+    return persistPipelineResult(input.leadId, rejectedResult, userId);
   }
 
   return persistPipelineResult(input.leadId, noSuitableAngle("No suitable outreach angle found after every surviving observation was evaluated.", {
@@ -475,7 +551,8 @@ export async function runOutreachPipeline(input = {}, { userId } = {}) {
     summary: diagnosticSummary(evaluatedCandidates, candidates.length),
     candidateCount: candidates.length,
     skippedLowConfidence: evaluatedCandidates.filter((item) => item.status === "skipped_low_confidence").length,
-    rejectedByQualityGate: evaluatedCandidates.filter((item) => item.status === "rejected").length
+    rejectedByQualityGate: evaluatedCandidates.filter((item) => item.status === "rejected").length,
+    usedFallbackCandidates
   }), userId);
 }
 

@@ -230,6 +230,7 @@ export default function OutreachPage() {
   const [reportServices, setReportServices] = useState(DEFAULT_REPORT_SERVICE_IDS);
   const [batchReportServices, setBatchReportServices] = useState(DEFAULT_REPORT_SERVICE_IDS);
   const [includeReport, setIncludeReport] = useState(true);
+  const [liveQualityGate, setLiveQualityGate] = useState(null);
   const [deleteAllOpen, setDeleteAllOpen] = useState(false);
   const [deleteAllText, setDeleteAllText] = useState("");
   const [deletingAll, setDeletingAll] = useState(false);
@@ -238,7 +239,8 @@ export default function OutreachPage() {
   const selectedLead = useMemo(() => leads.find((lead) => lead.id === selectedLeadId) || leads[0] || null, [leads, selectedLeadId]);
   const currentState = pipelineState(selectedLead);
   const currentResult = pipelineResult || resultFromLead(selectedLead);
-  const qualityGate = currentResult?.qualityGate || currentState?.qualityGate || null;
+  const storedQualityGate = currentResult?.qualityGate || currentState?.qualityGate || null;
+  const qualityGate = liveQualityGate || storedQualityGate || null;
   const observation = currentResult?.selectedObservation || currentState?.selectedObservation || null;
   const gmailSender = emailAccounts.find((account) => account.provider === "GOOGLE");
   const gmailReady = Boolean(gmailSender?.configured && gmailSender?.active);
@@ -247,12 +249,9 @@ export default function OutreachPage() {
   const reportReady = Boolean(report?.canAttach);
   const serviceLabelsById = Object.fromEntries(REPORT_SERVICE_OPTIONS.map((service) => [service.id, service.label]));
   const emailSelectedServiceIds = currentResult?.emailSelectedServices || currentState?.emailSelectedServices || [];
-  const previewReportServices = (report?.selectedServices || [])
-    .map((item) => ({ id: item.id, label: item.label }))
-    .filter((item) => item.id && item.label)
-    .length
-    ? (report?.selectedServices || []).map((item) => ({ id: item.id, label: item.label }))
-    : reportServices.map((serviceId) => ({ id: serviceId, label: serviceLabelsById[serviceId] || serviceId }));
+  const previewReportServices = reportServices.map((serviceId) => ({ id: serviceId, label: serviceLabelsById[serviceId] || serviceId }));
+  const approvedReportServiceIds = (report?.selectedServices || []).map((item) => item.id).filter(Boolean);
+  const approvedReportFocus = naturalJoin((report?.selectedServices || []).map((item) => item.label).filter(Boolean));
   const finalBody = assembleEmail({
     draft,
     sender: draftSender,
@@ -265,9 +264,12 @@ export default function OutreachPage() {
   const fullEmail = draft.subject ? `Subject: ${draft.subject}\n\n${finalBody}` : finalBody;
   const selectedReportFocus = naturalJoin(reportServices.map((serviceId) => serviceLabelsById[serviceId] || serviceId));
   const emailServiceMismatch = Boolean(reportServices.length && !sameServiceSelection(emailSelectedServiceIds, reportServices));
-  const attachmentFocusText = selectedReportFocus
-    ? `Email will include the approved PDF report focused on ${selectedReportFocus}.`
-    : "Email will include the approved PDF report.";
+  const reportServiceMismatch = Boolean(reportReady && approvedReportServiceIds.length && !sameServiceSelection(approvedReportServiceIds, reportServices));
+  const attachmentFocusText = reportServiceMismatch
+    ? `The approved PDF is still focused on ${approvedReportFocus || "older services"}. Regenerate and approve the report to match ${selectedReportFocus || "the current selection"}.`
+    : approvedReportFocus
+      ? `Email will include the approved PDF report focused on ${approvedReportFocus}.`
+      : "Email will include the approved PDF report.";
 
   const params = useMemo(() => {
     const next = { limit: 100 };
@@ -371,6 +373,49 @@ export default function OutreachPage() {
   }, [report?.id, report?.canAttach]);
 
   useEffect(() => {
+    if (!selectedLead || !draft.subject || !finalBody.trim() || !observation) {
+      setLiveQualityGate(null);
+      return undefined;
+    }
+    const reportContext = includeReport && reportReady
+      ? {
+          selectedServices: previewReportServices,
+          attachmentEnabled: true
+        }
+      : undefined;
+    const timer = setTimeout(async () => {
+      try {
+        const { data } = await api.post("/outreach/email-quality-gate", {
+          email: {
+            subject: draft.subject,
+            body: finalBody
+          },
+          selectedObservation: observation,
+          company: {
+            name: selectedLead.company,
+            website: selectedLead.website
+          },
+          industry: selectedLead.industryRef?.name || selectedLead.industry || "",
+          businessType: selectedLead.scanEvidence?.businessUnderstanding?.businessIdentity?.businessType || "",
+          ...(reportContext ? { reportContext } : {})
+        });
+        setLiveQualityGate(data);
+      } catch {
+        setLiveQualityGate(null);
+      }
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [
+    selectedLead?.id,
+    draft.subject,
+    finalBody,
+    observation?.id,
+    includeReport,
+    reportReady,
+    JSON.stringify(previewReportServices)
+  ]);
+
+  useEffect(() => {
     if (!selectedLead?.id) return;
     leadRefs.current[selectedLead.id]?.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [selectedLead?.id]);
@@ -437,7 +482,8 @@ export default function OutreachPage() {
       }
       if (data.status === "approved" && data.reportError) push(`Email approved, but the PDF report failed: ${data.reportError}`, "error");
       if (data.status === "approved") push("Email approved for review");
-      if (data.status === "no_suitable_angle") push("No suitable angle found", "error");
+      if (data.status === "rejected") push("A service-matched draft was generated, but it still needs review.", "error");
+      if (data.status === "no_suitable_angle") push("Automatic angle selection was too strict, so review the best available draft below.", "error");
       return data;
     } catch (error) {
       setLeadWorkflow(lead.id, { ...pipelineState(lead), status: "REJECTED", label: "Rejected", qualityGate: { reason: error.response?.data?.message || "Pipeline failed" } });
@@ -505,6 +551,7 @@ export default function OutreachPage() {
     if (!draft.subject) return push("Add a subject first", "error");
     if (!draft.body.trim()) return push("Add an email body first", "error");
     if (emailServiceMismatch) return push("Email does not match the selected report services. Regenerate email before sending.", "error");
+    if (reportServiceMismatch && includeReport) return push("The approved PDF report does not match the currently selected services. Regenerate and approve the report first.", "error");
     setSending(true);
     try {
       const saved = await saveDraft();
@@ -544,6 +591,7 @@ export default function OutreachPage() {
     if (!draft.subject) return push("Add a subject first", "error");
     if (!draft.body.trim()) return push("Add an email body first", "error");
     if (emailServiceMismatch) return push("Email does not match the selected report services. Regenerate email before sending.", "error");
+    if (reportServiceMismatch && includeReport) return push("The approved PDF report does not match the currently selected services. Regenerate and approve the report first.", "error");
     setSendingTest(true);
     try {
       const saved = await saveDraft();
@@ -838,7 +886,7 @@ export default function OutreachPage() {
                 {report?.confidenceScore != null && <Badge className="bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700">Confidence {report.confidenceScore}/100</Badge>}
               </div>
               <p className={`text-sm leading-6 ${textMuted}`}>{report?.summary || "Generate a website opportunity report to attach something concrete and useful with the outreach email."}</p>
-              <ReportServiceSelector value={reportServices} onChange={setReportServices} />
+              <ReportServiceSelector value={reportServices} onChange={setReportServices} analysisTarget={selectedLead} />
               <div className="flex flex-wrap gap-2">
                 {reportServices.map((serviceId) => (
                   <Badge key={serviceId} className="bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700">{serviceLabelsById[serviceId] || serviceId}</Badge>
@@ -861,6 +909,11 @@ export default function OutreachPage() {
                 <Button variant="secondary" disabled={!report?.qualityPassed || reportAction === "approve"} onClick={approveSelectedReport}>{reportAction === "approve" ? "Approving..." : "Approve Report"}</Button>
               </div>
               {report?.qualityGate?.failedChecks?.length ? <p className="text-sm text-amber-700 dark:text-amber-300">Quality gate: {report.qualityGate.failedChecks.join(", ")}</p> : null}
+              {reportServiceMismatch ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+                  The approved report is out of sync with the currently selected services. Regenerate and approve the report before attaching it.
+                </div>
+              ) : null}
               {emailServiceMismatch ? (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
                   Email does not match the selected report services. Regenerate email before sending.
@@ -893,7 +946,7 @@ export default function OutreachPage() {
             </div>
             <div className="space-y-4 p-5">
               {currentState.status === "REJECTED" && <Notice tone="rose">Quality gate rejected this email. Edit before sending.</Notice>}
-              {currentState.status === "NO_SUITABLE_ANGLE" && <Notice tone="orange">No suitable angle was found. You can still write a manual email.</Notice>}
+              {currentState.status === "NO_SUITABLE_ANGLE" && <Notice tone="orange">Automatic angle selection was too strict for this lead. Review or rewrite the strongest available draft below.</Notice>}
               {!draft.toEmail && <Notice tone="amber">No recipient email found. Add one before sending.</Notice>}
 
               <div className="grid gap-3 sm:grid-cols-2">
@@ -908,7 +961,7 @@ export default function OutreachPage() {
                   className="min-h-[420px] resize-y bg-white text-[15px] leading-7 dark:bg-slate-950"
                   value={draft.body}
                   onChange={(event) => setDraft({ ...draft, body: event.target.value })}
-                  placeholder={currentState.status === "NO_SUITABLE_ANGLE" ? "Write a manual email body here..." : "Edit the generated email body..."}
+                  placeholder={currentState.status === "NO_SUITABLE_ANGLE" ? "Review or rewrite the draft email body here..." : "Edit the generated email body..."}
                 />
               </Field>
 
@@ -927,10 +980,22 @@ export default function OutreachPage() {
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Attachment</p>
                     <p className="mt-2 text-sm font-semibold text-slate-900 dark:text-slate-100">{includeReport && reportReady ? attachmentFocusText : "Email will send without a report attachment."}</p>
-                    <p className={`mt-1 text-sm ${textMuted}`}>{reportReady ? "You can still turn the attachment off for this send." : "Generate and approve a report first if you want to attach one."}</p>
+                    <p className={`mt-1 text-sm ${textMuted}`}>
+                      {reportReady
+                        ? (reportServiceMismatch
+                          ? "The attachment is blocked until the approved report matches the currently selected services."
+                          : "You can still turn the attachment off for this send.")
+                        : "Generate and approve a report first if you want to attach one."}
+                    </p>
                   </div>
                   <label className="inline-flex items-center gap-2 text-sm font-medium">
-                    <input type="checkbox" className="h-4 w-4" checked={includeReport && reportReady} disabled={!reportReady} onChange={(event) => setIncludeReport(event.target.checked)} />
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4"
+                      checked={includeReport && reportReady}
+                      disabled={!reportReady || reportServiceMismatch}
+                      onChange={(event) => setIncludeReport(event.target.checked)}
+                    />
                     Attach report
                   </label>
                 </div>
@@ -940,11 +1005,13 @@ export default function OutreachPage() {
                 <Button variant="secondary" disabled={savingDraft} onClick={saveDraft}><Clipboard size={16} /> {savingDraft ? "Saving..." : "Save Draft"}</Button>
                 <Button variant="secondary" disabled={!draft.subject && !draft.body} onClick={() => copyText(fullEmail, "Email copied")}><Clipboard size={16} /> Copy Email</Button>
                 <Button variant="secondary" disabled={!selectedLead || Boolean(runningLeadId)} onClick={() => runPipeline()}><RefreshCw size={16} /> Regenerate</Button>
-                <Button disabled={sending || !draft.subject || !draft.body || emailServiceMismatch} onClick={sendEmail}><Send size={16} /> {currentState.status === "APPROVED" ? "Send" : "Send Anyway"}</Button>
+                <Button disabled={sending || !gmailReady || !draft.subject || !draft.body || emailServiceMismatch || (reportServiceMismatch && includeReport)} onClick={sendEmail}><Send size={16} /> {currentState.status === "APPROVED" ? "Send" : "Send Anyway"}</Button>
               </div>
-              {emailServiceMismatch ? (
+              {emailServiceMismatch || (reportServiceMismatch && includeReport) ? (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
-                  Email does not match the selected report services. Regenerate email before sending.
+                  {emailServiceMismatch
+                    ? "Email does not match the selected report services. Regenerate email before sending."
+                    : "The approved PDF report does not match the currently selected services. Regenerate and approve the report before sending."}
                 </div>
               ) : null}
 
@@ -952,7 +1019,7 @@ export default function OutreachPage() {
                 <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Send test email</p>
                 <div className="flex flex-col gap-2 sm:flex-row">
                   <Input value={testEmail} onChange={(event) => setTestEmail(event.target.value)} placeholder="your@email.com" />
-                  <Button variant="secondary" disabled={sendingTest || !draft.subject || !draft.body || emailServiceMismatch} onClick={sendTestEmail}>{sendingTest ? "Sending..." : "Send Test"}</Button>
+                  <Button variant="secondary" disabled={sendingTest || !gmailReady || !draft.subject || !draft.body || emailServiceMismatch || (reportServiceMismatch && includeReport)} onClick={sendTestEmail}>{sendingTest ? "Sending..." : "Send Test"}</Button>
                 </div>
               </div>
             </div>

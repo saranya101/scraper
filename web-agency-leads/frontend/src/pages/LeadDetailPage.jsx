@@ -697,7 +697,7 @@ export default function LeadDetailPage() {
               </div>
             </div>
             <div className="mt-4">
-              <ReportServiceSelector value={reportServices} onChange={setReportServices} />
+              <ReportServiceSelector value={reportServices} onChange={setReportServices} analysisTarget={lead} />
             </div>
             <div className="mt-4 flex flex-wrap gap-2">
               {reportServices.map((serviceId) => (

@@ -17,7 +17,8 @@ const sendOneBody = z.object({
   outreachDraftId: z.string().optional().nullable(),
   toEmail: z.string().email(),
   subject: z.string().min(1),
-  body: z.string().min(1)
+  body: z.string().min(1),
+  includeReport: z.boolean().optional()
 });
 
 const sendTestBody = sendOneBody.extend({

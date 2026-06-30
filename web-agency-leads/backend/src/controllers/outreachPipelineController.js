@@ -13,5 +13,8 @@ export async function decide(req, res) {
 }
 
 export async function saveDraft(req, res) {
-  res.json(await outreachPipelineService.savePipelineDraft(req.body.leadId, req.body.draft || {}));
+  res.json(await outreachPipelineService.savePipelineDraft(req.body.leadId, {
+    ...(req.body.draft || {}),
+    emailSelectedServices: req.body.emailSelectedServices || []
+  }));
 }

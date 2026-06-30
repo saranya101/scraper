@@ -312,7 +312,8 @@ router.post(
             name: z.string().optional(),
             title: z.string().optional(),
             company: z.string().optional()
-          }).optional()
+          }).optional(),
+          selectedServices: z.array(z.string()).optional()
         })
       }).parse(value)
   }),
@@ -351,6 +352,7 @@ router.post(
       z.object({
         body: z.object({
           leadId: z.string().min(1),
+          emailSelectedServices: z.array(z.string()).optional(),
           draft: z.object({
             fromName: z.string().optional(),
             fromEmail: z.string().optional(),

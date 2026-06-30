@@ -1,20 +1,16 @@
 import OpenAI from "openai";
+import { SERVICE_EMAIL_ANGLES } from "../constants/serviceEmailAngles.js";
 import { EMAIL_WORD_MAX, EMAIL_WORD_MIN, countEmailWords, logEmailWordLimitQa } from "../utils/emailWordLimit.js";
 import { HttpError } from "../utils/httpError.js";
 
 const bannedPhrases = [
   "audit",
-  "report",
   "score",
   "analysis",
   "analyzed",
   "analysed",
   "ai",
   "artificial intelligence",
-  "optimisation",
-  "optimization",
-  "conversion",
-  "funnel",
   "ux",
   "user experience",
   "value proposition",
@@ -44,8 +40,6 @@ const bannedPhrases = [
   "small pause",
   "uncertainty",
   "ready to act",
-  "visitors",
-  "enquiry flow",
   "revolutionize",
   "game changer"
 ];
@@ -98,10 +92,153 @@ function normalizeInput(input = {}) {
     senderName: clean(sender.name || input.senderName || ""),
     senderTitle: clean(sender.title || input.senderTitle || ""),
     senderCompany: clean(sender.company || input.senderCompany || ""),
+    reportContext: input.reportContext && typeof input.reportContext === "object" ? input.reportContext : null,
     qualityFeedback: input.qualityFeedback || input.feedback || null,
     failedChecks: Array.isArray(input.failedChecks) ? input.failedChecks.map(clean).filter(Boolean) : [],
     confidenceMode: clean(input.confidenceMode || "")
   };
+}
+
+function naturalJoin(values = []) {
+  const items = values.map(clean).filter(Boolean);
+  if (!items.length) return "";
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
+function stableVariantKey(value = "") {
+  return String(value || "").split("").reduce((sum, char) => sum + char.charCodeAt(0), 0);
+}
+
+function chooseStableVariant(seed, values = []) {
+  if (!values.length) return "";
+  return values[Math.abs(stableVariantKey(seed)) % values.length];
+}
+
+function selectedServices(input = {}) {
+  return Array.isArray(input.reportContext?.selectedServices)
+    ? input.reportContext.selectedServices
+        .map((item) => typeof item === "string" ? { id: item, label: item } : item)
+        .filter((item) => item?.id)
+    : [];
+}
+
+function selectedServiceIds(input = {}) {
+  return selectedServices(input).map((item) => item.id).filter(Boolean);
+}
+
+function selectedServiceLabels(input = {}) {
+  return selectedServices(input).map((item) => clean(item.label || item.id)).filter(Boolean);
+}
+
+function selectedAngles(input = {}) {
+  return selectedServiceIds(input).map((id) => ({ id, ...(SERVICE_EMAIL_ANGLES[id] || {}) })).filter((item) => item.phrase);
+}
+
+function reportFocusAreas(input = {}) {
+  return naturalJoin(selectedServiceLabels(input).slice(0, 3));
+}
+
+function reportAnglePhrases(input = {}) {
+  return naturalJoin(selectedAngles(input).map((item) => item.phrase).slice(0, 3));
+}
+
+function reportImprovementPhrases(input = {}) {
+  const concise = selectedAngles(input).map((item) => item.improvementPhrase).filter(Boolean);
+  if (concise.length) return naturalJoin(concise.slice(0, 2));
+  const explicit = Array.isArray(input.reportContext?.topServiceRecommendations)
+    ? input.reportContext.topServiceRecommendations.map(clean).filter(Boolean)
+    : [];
+  return naturalJoin(explicit.slice(0, 2));
+}
+
+function reportQuickWin(input = {}, observation = {}) {
+  const explicit = Array.isArray(input.reportContext?.topServiceRecommendations)
+    ? input.reportContext.topServiceRecommendations.map(clean).filter(Boolean)
+    : [];
+  if (explicit.length) return explicit[0];
+  const serviceWin = selectedAngles(input).flatMap((item) => item.quickWins || []).filter(Boolean)[0];
+  return serviceWin || quickWinFromObservation(observation);
+}
+
+function quickWinText(value = "") {
+  const next = clean(value).replace(/[.]$/, "");
+  if (!next) return "";
+  if (/^to\b/i.test(next)) return next;
+  if (/^(add|make|rewrite|improve|strengthen|clarify|connect|surface|bring|build|create|use|set up|set|track|reduce|turn)\b/i.test(next)) {
+    return `to ${next}`;
+  }
+  return next;
+}
+
+function reportPrimaryObservation(input = {}, observation = {}) {
+  const ids = selectedServiceIds(input);
+  const observationText = clean(`${observation.actual || ""} ${observation.description || ""} ${observation.reasoning || ""} ${observation.title || ""}`).toLowerCase();
+  const explicitProblems = Array.isArray(input.reportContext?.topServiceProblems)
+    ? input.reportContext.topServiceProblems.map(clean).filter(Boolean)
+    : [];
+  if (ids.includes("website_redesign") && ids.includes("seo") && ids.includes("lead_generation")) {
+    return "the site has a lot of service paths, but the strongest offer, local relevance, and main contact route could be clearer";
+  }
+  if (ids.includes("lead_generation") && ids.includes("whatsapp_automation")) {
+    return "visitors who are interested may not have a very guided path to ask a question, get qualified, or take the next step";
+  }
+  if (explicitProblems.length) {
+    const firstProblem = explicitProblems[0]
+      .replace(/^the business may /i, "")
+      .replace(/^potential customers may /i, "")
+      .replace(/^visitors may /i, "")
+      .replace(/[.]$/g, "");
+    if (firstProblem) return firstProblem.charAt(0).toLowerCase() + firstProblem.slice(1);
+  }
+  if (/service-like links|service links|many service/.test(observationText)) {
+    return ids.includes("seo") || ids.includes("website_redesign") || ids.includes("lead_generation")
+      ? "the service structure is broad, but the main offer and contact path could be clearer"
+      : "the site could guide people toward the most important next step more clearly";
+  }
+  const primaryAngle = selectedAngles(input)[0];
+  if (primaryAngle?.observation) return primaryAngle.observation;
+  return clean(observation.actual || observation.description || observation.title).replace(/[.]$/, "");
+}
+
+function reportBusinessOutcome(input = {}, observation = {}) {
+  const primaryAngle = selectedAngles(input)[0];
+  if (primaryAngle?.outcome) return primaryAngle.outcome;
+  const combined = clean(`${observation.expected || ""} ${observation.actual || ""} ${observation.description || ""}`).toLowerCase();
+  if (/book|appointment/.test(combined)) return "book or enquire without extra friction";
+  if (/contact|form|whatsapp|lead/.test(combined)) return "get in touch quickly";
+  if (/search|seo|location/.test(combined)) return "find the right page through search";
+  return "understand the offer and take the next step";
+}
+
+function reportSummary(input = {}) {
+  return clean(input.reportContext?.reportSummary || "");
+}
+
+function technicalObservationWarning(text = "") {
+  return /\b(service-like links|detector|crawler|confidence score|opportunity score)\b/i.test(text);
+}
+
+function quickWinFromObservation(observation = {}) {
+  const combined = clean(`${observation.expected || ""} ${observation.actual || ""} ${observation.description || ""} ${observation.reasoning || ""} ${observation.category || ""}`).toLowerCase();
+  if (/home|homepage|hero|above.?fold/.test(combined)) return "making the homepage message and main CTA clearer above the fold";
+  if (/book|booking|appointment/.test(combined)) return "making the booking CTA easier to find, especially on mobile";
+  if (/contact|form|whatsapp|enquir|inquir/.test(combined)) return "making the contact path easier to spot without extra scrolling";
+  if (/review|testimonial|trust|credib/.test(combined)) return "bringing trust signals closer to the main contact action";
+  if (/mobile/.test(combined)) return "making the primary action easier to use on mobile";
+  return "making the main next step clearer for interested visitors";
+}
+
+function businessPhrase(input = {}) {
+  const label = clean(input.businessType || input.industry || "").toLowerCase();
+  if (!label) return "a business like this";
+  if (label === "dental") return "a dental clinic";
+  if (label === "medical") return "a medical clinic";
+  if (label === "legal") return "a law firm";
+  if (label === "restaurant") return "a restaurant";
+  const article = /^[aeiou]/.test(label) ? "an" : "a";
+  return `${article} ${label}`;
 }
 
 function comparisonNoun(input = {}) {
@@ -298,31 +435,43 @@ function extraVisitorContextFromInsight(insight) {
 
 function lowFrictionQuestion(observation) {
   const combined = clean(`${observation.expected} ${observation.actual} ${observation.category}`).toLowerCase();
-  if (/feedback|review|testimonial/.test(combined)) return "Curious if you have ever had similar feedback.";
-  if (/priority|pricing|cost/.test(combined)) return "Or has it just never been a priority?";
-  return "Was that intentional?";
+  if (/booking|appointment|contact|enquir|inquir/.test(combined)) return "Would it be useful if I showed what a cleaner version of this flow could look like?";
+  return chooseStableVariant(combined, [
+    "Would it be okay if I sent over a few suggestions on how we would improve this?",
+    "Would you be open to me sharing a few ideas on how this could be improved?",
+    "Happy to send over a quick breakdown if this is something you are looking at improving."
+  ]);
 }
 
 function fallbackEmail(input) {
   const { observation, companyName, recipientName } = input;
   const greeting = firstName(recipientName) ? `Hi ${firstName(recipientName)},` : "Hi there,";
-  const visitorExperience = visitorExperienceFromObservation(observation, input);
-  const insight = insightSentenceFromVisitorExperience(visitorExperience);
-  const opener = openerFor(input);
+  const serviceAngle = reportAnglePhrases(input);
+  const opener = serviceAngle
+    ? `I spent a few minutes reviewing the ${companyName} website and noticed a few opportunities around ${serviceAngle}.`
+    : `I spent a few minutes reviewing the ${companyName} website and noticed that ${reportPrimaryObservation(input, observation)}.`;
+  const businessProblem = `The main thing that stood out was that ${reportPrimaryObservation(input, observation)}. For ${businessPhrase(input)}, this could make it harder for people to ${reportBusinessOutcome(input, observation)}.`;
+  const reportSentence = input.reportContext
+    ? `I attached a short website opportunity report covering ${reportFocusAreas(input)} with a few specific suggestions around ${reportImprovementPhrases(input)}.`
+    : "";
+  const quickWin = `One quick win would be ${quickWinText(reportQuickWin(input, observation))}.`;
   const question = lowFrictionQuestion(observation);
-  const signoff = signoffFor(input);
   const body = [
     greeting,
     "",
     opener,
     "",
-    insight,
+    businessProblem,
+    "",
+    reportSentence || null,
+    reportSentence ? "" : null,
+    quickWin,
     "",
     question,
     "",
     "Thanks,",
-    signoff
-  ].join("\n");
+    firstName(input.senderName) || signoffFor(input)
+  ].filter((line) => line !== null).join("\n");
   return {
     subject: subjectFor(input),
     body: cleanEmailBody(body)
@@ -343,9 +492,13 @@ function signatureFor(input = {}) {
 
 function subjectFor(input = {}) {
   const company = input.companyName && input.companyName !== "your team" ? input.companyName : "";
+  const serviceIds = selectedServiceIds(input);
+  if (serviceIds.includes("appointment_booking")) return "Quick idea for your booking flow";
+  if (serviceIds.includes("whatsapp_automation")) return "Quick idea for your enquiry flow";
+  if (serviceIds.includes("lead_generation")) return "Quick idea for your contact flow";
+  if (serviceIds.includes("website_redesign")) return company ? `Quick thought on ${company}` : "Quick thought on your homepage";
   const combined = clean(`${input.observation?.title || ""} ${input.observation?.expected || ""} ${input.observation?.actual || ""}`).toLowerCase();
-  if (/home|homepage|hero|above.?fold/.test(combined)) return "Quick question about your homepage";
-  if (company) return `Quick thought on ${company}`;
+  if (company) return chooseStableVariant(company, [`Quick thought on ${company}`, `Small website suggestion for ${company}`, `Website improvement idea for ${company}`]);
   return "Small question about your website";
 }
 
@@ -360,9 +513,10 @@ function insertLengthGuardSentence(body, sentence) {
   const cleanBody = cleanEmailBody(body);
   const cleanSentence = clean(sentence);
   const closingQuestions = [
-    "Was that intentional?",
-    "Or has it just never been a priority?",
-    "Curious if you have ever had similar feedback."
+    "Would it be okay if I sent over a few suggestions on how we would improve this?",
+    "Would you be open to me sharing a few ideas on how this could be improved?",
+    "Happy to send over a quick breakdown if this is something you are looking at improving.",
+    "Would it be useful if I showed what a cleaner version of this flow could look like?"
   ];
   for (const question of closingQuestions) {
     if (cleanBody.includes(question)) {
@@ -391,10 +545,41 @@ function ensureMinimumEmailLength(email, input, source) {
   return { ...email, body: paddedBody };
 }
 
+function ensureMaximumEmailLength(email, input, source) {
+  let body = cleanEmailBody(email.body || email.emailBody || email.fullMessage);
+  let count = countEmailWords(body);
+  if (count <= EMAIL_WORD_MAX) return { ...email, body };
+
+  const compactReportSentence = input.reportContext
+    ? `I attached a short website opportunity report covering ${reportFocusAreas(input)}.`
+    : "";
+  if (compactReportSentence) {
+    body = body.replace(
+      /I attached a short website opportunity report covering[\s\S]*?(?=\n\n(?:One quick win|A quick win|Would it))/i,
+      `${compactReportSentence}\n\n`
+    );
+    count = countEmailWords(body);
+  }
+
+  if (count > EMAIL_WORD_MAX) {
+    body = body.replace(/One quick win would be /i, "A quick win would be ");
+    count = countEmailWords(body);
+  }
+
+  console.info("[email-length-tighten]", JSON.stringify({
+    source,
+    tightenedWordCount: count,
+    minimum: EMAIL_WORD_MIN,
+    maximum: EMAIL_WORD_MAX
+  }));
+  return { ...email, body: cleanEmailBody(body) };
+}
+
 function hasBannedLanguage(value) {
   const text = clean(value).toLowerCase();
   if (placeholderPattern.test(value)) return true;
   if (bannedOpeners.test(cleanEmailBody(value))) return true;
+  if (technicalObservationWarning(value)) return true;
   return bannedPhrases.some((phrase) => {
     if (phrase === "ai") return /\bai\b/.test(text);
     return text.includes(phrase);
@@ -430,11 +615,19 @@ function validateEmail(email, observation, input = {}, source = "unknown") {
 }
 
 function buildPrompt(input) {
-  const visitorExperience = visitorExperienceFromObservation(input.observation, input);
-  const humanInsight = insightSentenceFromVisitorExperience(visitorExperience);
-  const opener = openerFor(input);
+  const serviceLabels = selectedServiceLabels(input);
+  const serviceAngle = reportAnglePhrases(input);
+  const serviceObservation = reportPrimaryObservation(input, input.observation);
+  const serviceOutcome = reportBusinessOutcome(input, input.observation);
+  const quickWin = quickWinText(reportQuickWin(input, input.observation));
+  const opener = serviceAngle
+    ? `I spent a few minutes reviewing the ${input.companyName} website and noticed a few opportunities around ${serviceAngle}.`
+    : `I spent a few minutes reviewing the ${input.companyName} website and noticed that ${serviceObservation}.`;
   const question = lowFrictionQuestion(input.observation);
   const signature = signatureFor(input);
+  const reportSentence = input.reportContext
+    ? `I attached a short website opportunity report covering ${reportFocusAreas(input)} with a few specific suggestions around ${reportImprovementPhrases(input)}.`
+    : "";
   const feedbackBlock = input.qualityFeedback || input.failedChecks.length
     ? `\nPrevious quality gate feedback to avoid this time. Do not mention this feedback in the email:\nFailed checks: ${JSON.stringify(input.failedChecks || [])}\nFeedback: ${JSON.stringify(input.qualityFeedback || {}, null, 2)}\n`
     : "";
@@ -445,11 +638,20 @@ You are NOT scoring observations.
 You are NOT selecting observations.
 The observation has already been chosen.
 
-Internal visitorExperience object:
-${JSON.stringify(visitorExperience, null, 2)}
+Selected report services:
+${JSON.stringify(serviceLabels, null, 2)}
 
-Single insight sentence to write from:
-"${humanInsight}"
+Selected service phrases:
+"${serviceAngle || "not provided"}"
+
+Report summary:
+"${reportSummary(input) || "not provided"}"
+
+Top service problems:
+${JSON.stringify(input.reportContext?.topServiceProblems || [], null, 2)}
+
+Top service recommendations:
+${JSON.stringify(input.reportContext?.topServiceRecommendations || [], null, 2)}
 
 Natural opener:
 "${opener}"
@@ -458,7 +660,7 @@ Soft question to end with:
 "${question}"
 ${feedbackBlock}
 
-The original observation is included only so you avoid inventing anything. Do not quote its title or audit wording:
+The original observation is included only so you avoid inventing anything. Translate it into business language tied to the selected services. Do not quote its title or audit wording:
 ${JSON.stringify(input.observation, null, 2)}
 
 Company: ${input.companyName}
@@ -466,17 +668,19 @@ Recipient first name, if known: ${firstName(input.recipientName) || "unknown"}
 ${signature ? `Signature must be exactly:\n${signature}` : "No sender signature was supplied. Do not invent or include one."}
 
 Rules:
-- 45 to 120 words.
-- If the draft is under 45 words, add one natural visitor-context sentence before the final question.
+- 100 to 150 words.
+- If the draft is under 100 words, add one natural business-context sentence before the final CTA.
 - Natural and conversational.
 - Sounds like one professional writing to another.
-- Derive the insight primarily from actual evidence, supporting evidence, and reasoning. Use the observation title only as a last resort.
-- Write from the visitorExperience object, not from blueprint titles or internal labels.
-- Use normal email formatting: greeting, body, question, "Thanks,", then the supplied signature.
+- The email must match the selected PDF report services only.
+- Do not mention services that were not selected.
+- Translate technical observation language into business language.
+- The main observation should align with this business-facing angle: "${serviceObservation}".
+- The business outcome should align with: "${serviceOutcome}".
+- Use normal email formatting: greeting, body, low-pressure CTA, "Thanks,", then the supplied signature.
 - Never contradict the supplied evidence. If evidence is ambiguous or confidence is medium, use cautious language rather than an absolute claim.
 - State the core insight only once.
 - Every sentence must add new information.
-- Prefer a shorter email when the insight is simple.
 - Subject must not be only the company name.
 - Good subject examples: Quick question about your homepage, Quick thought on ${input.companyName}, Small question about your website.
 - No labels or headings.
@@ -487,19 +691,22 @@ Rules:
 - No exaggerated claims.
 - No meetings or calendar links.
 - No "discuss this further" phrasing.
-- Do not use these phrases: partially detected, missing, observation, optimisation, conversion, funnel, UX, user experience, value proposition, website review, consultant, marketing, recommendation.
-- Do not use these phrases: next step for an enquiry, small pause, uncertainty, ready to act, visitors, enquiry flow.
+- Do not use these phrases: partially detected, missing, observation, UX, user experience, website review, consultant, marketing, recommendation.
+- Do not use these phrases: 13 service-like links were found, the detector found, the crawler observed, confidence score, opportunity score.
 - Avoid openings like: I wanted to, I noticed, One thing caught my eye, It seems, I thought, I figured, Worth mentioning, I was reviewing your website.
 - No placeholders.
 - Do not write "I hope this message finds you well."
 - Do not use "Best regards."
 - Do not say "this space" when industry context is available.
 - No hard sell.
-- Do not pitch services.
-- Use the supplied opener, then one insight sentence, one simple question, and the supplied signature only. Add a short context sentence only if needed to meet the word limit.
+- Mention one specific observation only, but frame it through the selected service angle.
+- Explain the business problem behind it in a calm way.
+- ${input.reportContext ? "Mention the attached report exactly once." : "Do not mention any report or attachment."}
+- Include one specific quick win connected to the selected services. Prefer this quick win angle: "${quickWin}".
+- Use the supplied opener, then one business-problem sentence, ${input.reportContext ? "the report sentence, " : ""}one quick-win sentence, one soft CTA, and the supplied signature. Add a short context sentence only if needed to meet the word limit.
 - Do not invent why you found the company.
-- End with the supplied low-friction question.
-- Do not mention audits, reports, scores, analyses, or recommendations.
+- End with the supplied low-friction CTA.
+- Do not mention audits, scores, analyses, or recommendations.
 - Do not introduce any new observations.
 
 Return strict JSON only:
@@ -518,7 +725,7 @@ async function writeWithOpenAI(input) {
     messages: [
       {
         role: "system",
-        content: "You write restrained, natural first emails from one supplied observation only. Return strict JSON. Do not invent facts."
+        content: "You write restrained, natural first emails that must match the selected PDF report services. Use only the supplied evidence, selected services, report summary, and service problems. Return strict JSON. Do not invent facts or mention technical detector language."
       },
       { role: "user", content: buildPrompt(input) }
     ],
@@ -530,15 +737,16 @@ async function writeWithOpenAI(input) {
 export async function writeEmail(input = {}) {
   const normalized = normalizeInput(input);
   const generated = await writeWithOpenAI(normalized).catch(() => null);
-  const generatedWithLengthGuard = generated ? ensureMinimumEmailLength(generated, normalized, "openai") : null;
+  const generatedWithLengthGuard = generated ? ensureMaximumEmailLength(ensureMinimumEmailLength(generated, normalized, "openai"), normalized, "openai") : null;
   const validated = generatedWithLengthGuard ? validateEmail(generatedWithLengthGuard, normalized.observation, normalized, "openai") : { ok: false };
-  const fallbackWithLengthGuard = ensureMinimumEmailLength(fallbackEmail(normalized), normalized, "fallback");
+  const fallbackWithLengthGuard = ensureMaximumEmailLength(ensureMinimumEmailLength(fallbackEmail(normalized), normalized, "fallback"), normalized, "fallback");
   const email = validated.ok ? validated : validateEmail(fallbackWithLengthGuard, normalized.observation, normalized, "fallback");
   if (!email.ok) throw new HttpError(422, "Could not create a compliant email from the selected observation", email.diagnostics);
   return {
     selectedObservationId: normalized.observation.id,
     subject: email.subject,
     body: email.body,
-    wordCount: email.wordCount
+    wordCount: email.wordCount,
+    emailSelectedServices: selectedServiceIds(normalized)
   };
 }

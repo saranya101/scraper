@@ -1,5 +1,6 @@
 import { prisma } from "../repositories/prisma.js";
 import { HttpError, notFound } from "../utils/httpError.js";
+import { DEFAULT_REPORT_SERVICE_IDS, REPORT_SERVICE_MAP } from "../constants/reportServiceOptions.js";
 import { understandLeadBusiness } from "./businessUnderstandingService.js";
 import { filterConversationQuality } from "./conversationQualityService.js";
 import { writeEmail } from "./emailWriterService.js";
@@ -9,6 +10,7 @@ import { scoreObservations } from "./observationScoringService.js";
 import { filterOwnerInterest } from "./ownerInterestService.js";
 import { buildStructuredEvidenceForLead } from "./structuredEvidenceService.js";
 import { buildWebsiteBlueprint } from "./websiteBlueprintService.js";
+import { generateReport } from "./reportService.js";
 
 function clean(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -31,11 +33,36 @@ function senderFromUser(user) {
   };
 }
 
+function normalizeSelectedServices(input = [], fallback = DEFAULT_REPORT_SERVICE_IDS) {
+  const source = Array.isArray(input) ? input : [];
+  const ids = [...new Set(source.map((item) => typeof item === "string" ? item : item?.id).filter((id) => REPORT_SERVICE_MAP.has(id)))];
+  return (ids.length ? ids : fallback)
+    .map((id) => REPORT_SERVICE_MAP.get(id))
+    .filter(Boolean);
+}
+
+function topServiceProblemsFromPayload(payload = {}) {
+  return array(payload.serviceSections)
+    .flatMap((section) => array(section.businessProblems).map((problem) => clean(problem.title || problem.whyItMatters)))
+    .filter(Boolean)
+    .slice(0, 4);
+}
+
+function topServiceRecommendationsFromPayload(payload = {}) {
+  return array(payload.serviceSections)
+    .flatMap((section) => array(section.priorityActions).map((action) => clean(action.action || action.reason)))
+    .filter(Boolean)
+    .slice(0, 4);
+}
+
 async function getLead(leadId) {
   if (!leadId) return null;
   const lead = await prisma.lead.findUnique({
     where: { id: leadId },
-    include: { industryRef: true }
+    include: {
+      industryRef: true,
+      auditReports: { orderBy: { createdAt: "desc" }, take: 1 }
+    }
   });
   if (!lead) throw notFound("Lead not found");
   return lead;
@@ -53,13 +80,33 @@ async function defaultSender(input, userId) {
 
 function contextFrom(input, lead, phase1) {
   const identity = phase1?.businessIdentity || {};
+  const report = Array.isArray(lead?.auditReports) ? lead.auditReports[0] : null;
+  const payload = report?.reportData && typeof report.reportData === "object" ? report.reportData : {};
+  const selectedServices = normalizeSelectedServices(
+    Array.isArray(input.selectedServices) && input.selectedServices.length
+      ? input.selectedServices
+      : Array.isArray(report?.selectedServices) && report.selectedServices.length
+        ? report.selectedServices
+        : Array.isArray(payload.selectedServices) && payload.selectedServices.length
+          ? payload.selectedServices
+          : DEFAULT_REPORT_SERVICE_IDS
+  );
   return {
     company: {
       name: input.company?.name || lead?.company || identity.businessName || "",
       website: input.company?.website || lead?.website || input.website || ""
     },
     industry: input.industry || identity.industry || lead?.industryRef?.name || lead?.industry || "",
-    businessType: input.businessType || identity.businessType || ""
+    businessType: input.businessType || identity.businessType || "",
+    reportContext: selectedServices.length
+      ? {
+          selectedServices,
+          reportSummary: clean(report?.summary || payload.executiveSummary || ""),
+          topServiceProblems: topServiceProblemsFromPayload(payload),
+          topServiceRecommendations: topServiceRecommendationsFromPayload(payload),
+          attachmentEnabled: true
+        }
+      : null
   };
 }
 
@@ -181,6 +228,8 @@ function pipelineStateFromResult(result, userId) {
     confidence: result?.debug?.evaluatedCandidates?.find((item) => item.observationId === result?.selectedObservationId)?.confidence || null,
     qualityScore: result?.qualityGate?.qualityScore || null,
     observationCategory: result?.selectedObservation?.category || null,
+    reportStatus: result?.report?.status || result?.reportStatus || null,
+    emailSelectedServices: array(result?.emailSelectedServices || result?.email?.emailSelectedServices),
     lastRunAt: new Date().toISOString(),
     updatedBy: userId || null
   };
@@ -265,6 +314,7 @@ async function writeAndGate({ selectedObservation, context, sender, contact, ret
     company: context.company,
     industry: context.industry,
     businessType: context.businessType,
+    reportContext: context.reportContext,
     sender,
     contact,
     ...(caution ? { confidenceMode: caution } : {}),
@@ -275,7 +325,8 @@ async function writeAndGate({ selectedObservation, context, sender, contact, ret
     selectedObservation,
     company: context.company,
     industry: context.industry,
-    businessType: context.businessType
+    businessType: context.businessType,
+    reportContext: context.reportContext
   });
   return { email, qualityGate };
 }
@@ -349,6 +400,25 @@ async function evaluateCandidate({ candidate, context, sender, contact }) {
   };
 }
 
+async function attachReportIfApproved(result, input, userId) {
+  if (result?.status !== "approved" || !input?.leadId) return result;
+  try {
+    const report = await generateReport(input.leadId, userId, { selectedServices: input.selectedServices });
+    return {
+      ...result,
+      report,
+      reportStatus: report?.status || null
+    };
+  } catch (error) {
+    return {
+      ...result,
+      report: null,
+      reportStatus: "failed",
+      reportError: error?.message || "Report generation failed"
+    };
+  }
+}
+
 export async function runOutreachPipeline(input = {}, { userId } = {}) {
   const lead = await getLead(input.leadId);
   const sender = await defaultSender(input, userId);
@@ -382,19 +452,21 @@ export async function runOutreachPipeline(input = {}, { userId } = {}) {
     const result = await evaluateCandidate({ candidate, context, sender, contact });
     evaluatedCandidates.push(candidateDiagnostics(result));
     if (result.status === "approved") {
-      return persistPipelineResult(input.leadId, {
+      const approvedResult = await attachReportIfApproved({
         status: "approved",
         selectedObservationId: result.selectedObservationId,
         selectedObservation: result.selectedObservation,
         selectionReason: selectionReason(result.selectedObservation, scoring, conversationQuality, ownerInterest),
         email: result.email,
+        emailSelectedServices: result.email?.emailSelectedServices || [],
         qualityGate: result.qualityGate,
         firstQualityGate: result.firstQualityGate,
         debug: {
           evaluatedCandidates,
           summary: diagnosticSummary(evaluatedCandidates, candidates.length)
         }
-      }, userId);
+      }, input, userId);
+      return persistPipelineResult(input.leadId, approvedResult, userId);
     }
   }
 
@@ -476,7 +548,8 @@ export async function savePipelineDraft(leadId, draft = {}) {
       subject: cleanDraft.subject,
       body: cleanDraft.fullEmail || cleanDraft.body,
       wordCount: cleanDraft.fullEmail ? cleanDraft.fullEmail.split(/\s+/).filter(Boolean).length : cleanDraft.body.split(/\s+/).filter(Boolean).length
-    }
+    },
+    emailSelectedServices: array(draft.emailSelectedServices || current.emailSelectedServices)
   };
   const updated = await prisma.lead.update({
     where: { id: leadId },

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import * as leadController from "../controllers/leadController.js";
+import * as reportController from "../controllers/reportController.js";
 import { validate } from "../middleware/validate.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 
@@ -152,6 +153,12 @@ router.delete(
 router.post("/reprocess-opportunities", asyncHandler(leadController.reprocessAllOpportunities));
 router.get("/:id", asyncHandler(leadController.get));
 router.post("/:id/reprocess-opportunities", asyncHandler(leadController.reprocessOpportunities));
+router.post("/:leadId/report/generate", asyncHandler(reportController.generate));
+router.get("/:leadId/report", asyncHandler(reportController.latest));
+router.post("/:leadId/report/approve", asyncHandler(reportController.approve));
+router.post("/:leadId/report/regenerate", asyncHandler(reportController.regenerate));
+router.get("/:leadId/report/preview", asyncHandler(reportController.previewForLead));
+router.get("/:leadId/report/download", asyncHandler(reportController.downloadForLead));
 router.put(
   "/:id/stage",
   validate({

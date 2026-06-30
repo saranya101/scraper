@@ -444,19 +444,36 @@ model EmailSend {
 }
 
 model AuditReport {
-  id         String      @id @default(cuid())
-  leadId     String
-  lead       Lead        @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  userId     String
-  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  pdfUrl     String
-  reportData Json
-  emailSends EmailSend[]
-  createdAt  DateTime    @default(now())
-  updatedAt  DateTime    @updatedAt
+  id               String      @id @default(cuid())
+  leadId           String
+  lead             Lead        @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  userId           String
+  user             User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status           String      @default("not_started")
+  pdfUrl           String?
+  pdfPath          String?
+  reportData       Json
+  selectedServices Json?
+  screenshots      Json?
+  issues           Json?
+  recommendations  Json?
+  qualityGate      Json?
+  debugData        Json?
+  summary          String?     @db.Text
+  opportunityScore Int?
+  confidenceScore  Int?
+  error            String?     @db.Text
+  generatedAt      DateTime?
+  approvedAt       DateTime?
+  attachedAt       DateTime?
+  sentAt           DateTime?
+  emailSends       EmailSend[]
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
 
   @@index([leadId])
   @@index([userId])
+  @@index([status])
   @@map("audit_reports")
 }
 

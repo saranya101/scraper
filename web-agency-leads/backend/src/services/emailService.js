@@ -1,9 +1,11 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import axios from "axios";
 import jwt from "jsonwebtoken";
 import { prisma } from "../repositories/prisma.js";
 import { HttpError, notFound } from "../utils/httpError.js";
 import * as resendService from "./resendService.js";
+import * as reportService from "./reportService.js";
 
 const providers = {
   GOOGLE: {
@@ -321,30 +323,47 @@ function textToEmailHtml(body = "") {
   ].join("");
 }
 
-function makeGmailMessage({ from, toEmail, subject, text, html }) {
-  const boundary = `ocia_${crypto.randomBytes(12).toString("hex")}`;
+function makeGmailMessage({ from, toEmail, subject, text, html, attachments = [] }) {
+  const mixedBoundary = `ocia_mixed_${crypto.randomBytes(12).toString("hex")}`;
+  const altBoundary = `ocia_alt_${crypto.randomBytes(12).toString("hex")}`;
   const message = [
     `From: ${from}`,
     `To: ${toEmail}`,
     `Subject: ${subject}`,
     "MIME-Version: 1.0",
-    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    `Content-Type: multipart/mixed; boundary="${mixedBoundary}"`,
     "",
-    `--${boundary}`,
+    `--${mixedBoundary}`,
+    `Content-Type: multipart/alternative; boundary="${altBoundary}"`,
+    "",
+    `--${altBoundary}`,
     "Content-Type: text/plain; charset=utf-8",
     "Content-Transfer-Encoding: 8bit",
     "",
     text,
     "",
-    `--${boundary}`,
+    `--${altBoundary}`,
     "Content-Type: text/html; charset=utf-8",
     "Content-Transfer-Encoding: 8bit",
     "",
     html,
-    "",
-    `--${boundary}--`
+    ""
   ].join("\r\n");
-  return Buffer.from(message).toString("base64url");
+  const attachmentParts = attachments.flatMap((attachment) => ([
+    `--${mixedBoundary}`,
+    `Content-Type: ${attachment.mimeType}; name="${attachment.filename}"`,
+    "Content-Transfer-Encoding: base64",
+    `Content-Disposition: attachment; filename="${attachment.filename}"`,
+    "",
+    attachment.content.toString("base64").replace(/(.{76})/g, "$1\r\n"),
+    ""
+  ]));
+  return Buffer.from([
+    message,
+    `--${altBoundary}--`,
+    ...attachmentParts,
+    `--${mixedBoundary}--`
+  ].join("\r\n")).toString("base64url");
 }
 
 async function dailyLimit(userId) {
@@ -378,20 +397,60 @@ async function gmailAccount() {
   return account;
 }
 
-async function providerSend({ account, toEmail, subject, body }) {
+async function providerSend({ account, toEmail, subject, body, attachments = [] }) {
   const text = normalizeWhitespace(body);
   const html = textToEmailHtml(text);
   if (activeProvider() === "GMAIL") {
     const cfg = config("GOOGLE");
     await axios.post(
       cfg.sendUrl,
-      { raw: makeGmailMessage({ from: account.email, toEmail, subject, text, html }) },
+      { raw: makeGmailMessage({ from: account.email, toEmail, subject, text, html, attachments }) },
       { headers: { Authorization: `Bearer ${await accessToken(account)}` }, timeout: 30000 }
     );
     return { provider: "GMAIL", senderEmail: account.email };
   }
   await resendService.sendEmail({ to: toEmail, subject, html, text });
   return { provider: "RESEND", senderEmail: resendService.senderDetails().email };
+}
+
+async function resolveReportAttachment(userId, input = {}) {
+  if (!input.includeReport) return null;
+  const attachment = await reportService.resolveAttachmentForLead(input.leadId, userId, false);
+  if (!attachment) throw new HttpError(422, "No approved report is available to attach.");
+  const content = await fs.readFile(attachment.filePath);
+  const maxBytes = Number(process.env.REPORT_ATTACHMENT_MAX_BYTES || 8 * 1024 * 1024);
+  if (content.length > maxBytes) {
+    throw new HttpError(422, "The report attachment is too large to send.");
+  }
+  return { ...attachment, content };
+}
+
+function naturalJoin(values = []) {
+  const items = values.map((value) => String(value || "").trim()).filter(Boolean);
+  if (!items.length) return "";
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
+function normalizedServiceIds(input = []) {
+  return [...new Set((Array.isArray(input) ? input : []).map((item) => typeof item === "string" ? item : item?.id).filter(Boolean))].sort();
+}
+
+function sameServiceSelection(left = [], right = []) {
+  const a = normalizedServiceIds(left);
+  const b = normalizedServiceIds(right);
+  return a.length === b.length && a.every((item, index) => item === b[index]);
+}
+
+function appendReportMention(body, attachment) {
+  if (!attachment) return body;
+  if (/attached a short website opportunity report/i.test(body)) return body;
+  const focusAreas = naturalJoin((attachment.selectedServices || []).map((item) => item.label).filter(Boolean).slice(0, 3));
+  const sentence = focusAreas
+    ? `I attached a short website opportunity report with a few specific improvements around ${focusAreas}.`
+    : "I attached a short website opportunity report with a few specific suggestions.";
+  return `${String(body || "").trim()}\n\n${sentence}`;
 }
 
 export async function sendEmail(userId, input = {}) {
@@ -422,13 +481,18 @@ export async function sendEmail(userId, input = {}) {
   const provider = activeProvider();
   if (!["GMAIL", "RESEND"].includes(provider)) throw new HttpError(500, `Unsupported EMAIL_PROVIDER: ${provider}`);
   const account = provider === "GMAIL" ? await gmailAccount() : null;
-  const body = normalizeSendBody({ body: rawBody, lead, input, user, account: account || {} });
+  const attachment = await resolveReportAttachment(userId, input);
+  if (attachment && !sameServiceSelection(input.emailSelectedServices || [], attachment.selectedServices || [])) {
+    throw new HttpError(422, "Email does not match selected PDF services. Regenerate email.");
+  }
+  const body = normalizeSendBody({ body: appendReportMention(rawBody, attachment), lead, input, user, account: account || {} });
   const sendRecord = await prisma.emailSend.create({
     data: {
       leadId,
       outreachDraftId: input.outreachDraftId || null,
       userId,
       emailAccountId: account?.id || null,
+      auditReportId: attachment?.reportId || null,
       toEmail,
       subject,
       body,
@@ -439,7 +503,8 @@ export async function sendEmail(userId, input = {}) {
   });
 
   try {
-    const delivery = await providerSend({ account, toEmail, subject, body });
+    const delivery = await providerSend({ account, toEmail, subject, body, attachments: attachment ? [attachment] : [] });
+    if (attachment?.reportId) await reportService.markReportAttached(attachment.reportId);
     if (input.testOnly) {
       return prisma.emailSend.update({
         where: { id: sendRecord.id },
@@ -483,6 +548,7 @@ export async function sendEmail(userId, input = {}) {
       await tx.leadNote.create({ data: { leadId, userId, note: `Sent email to ${toEmail} from ${delivery.senderEmail} via ${delivery.provider}.` } });
       return updatedSend;
     });
+    if (attachment?.reportId) await reportService.markReportSent(attachment.reportId);
     return sent;
   } catch (error) {
     const failed = await prisma.emailSend.update({
@@ -505,7 +571,8 @@ export async function history(leadId, userId) {
     include: {
       user: { select: { id: true, name: true, email: true } },
       emailAccount: { select: { id: true, provider: true, email: true } },
-      outreachDraft: { select: { id: true, type: true, status: true } }
+      outreachDraft: { select: { id: true, type: true, status: true } },
+      auditReport: { select: { id: true, status: true, pdfUrl: true } }
     }
   });
   return {

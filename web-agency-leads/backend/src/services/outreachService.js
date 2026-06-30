@@ -28,10 +28,7 @@ const bannedEmailPhrases = [
   /robust presence/ig,
   /this indicates/ig,
   /opportunity score/ig,
-  /tech stack/ig,
-  /PDF/ig,
-  /audit report attached/ig,
-  /attached report/ig
+  /tech stack/ig
 ];
 
 function labelType(type) {
@@ -46,6 +43,10 @@ function labelType(type) {
 
 const leadInclude = {
   industryRef: true,
+  auditReports: {
+    orderBy: { createdAt: "desc" },
+    take: 1
+  },
   serviceOpportunities: {
     where: { recommended: true },
     include: { service: true },
@@ -440,15 +441,161 @@ function firstNameFromLead(lead) {
 }
 
 function safeEmailText(value) {
-  let next = String(value || "").replace(/audit report|PDF|attached report/ig, "notes");
+  let next = String(value || "");
   for (const phrase of bannedEmailPhrases) next = next.replace(phrase, "");
   return next
     .replace(/\s+can be\s+\./gi, ".")
     .replace(/\s+can be\s+(to|for)\s+/gi, " can be used $1 ")
-    .replace(/\s{2,}/g, " ")
+    .replace(/[ \t]{2,}/g, " ")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function naturalJoin(values = []) {
+  const items = values.map((value) => cleanText(value)).filter(Boolean);
+  if (!items.length) return "";
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
+function stableVariantKey(value = "") {
+  return String(value || "").split("").reduce((sum, char) => sum + char.charCodeAt(0), 0);
+}
+
+function chooseStableVariant(seed, values = []) {
+  if (!values.length) return "";
+  return values[Math.abs(stableVariantKey(seed)) % values.length];
+}
+
+function reportContextFromLead(lead) {
+  const report = Array.isArray(lead.auditReports) ? lead.auditReports[0] : null;
+  if (!report || !report.pdfUrl || !report.qualityGate?.passed || !["approved", "attached", "sent"].includes(report.status)) return null;
+  const payload = report.reportData && typeof report.reportData === "object" ? report.reportData : {};
+  const selectedServices = Array.isArray(report.selectedServices)
+    ? report.selectedServices
+    : Array.isArray(payload.selectedServices)
+      ? payload.selectedServices
+      : [];
+  const serviceSections = Array.isArray(payload.serviceSections) ? payload.serviceSections : [];
+  return {
+    id: report.id,
+    selectedServices,
+    serviceSections,
+    quickWin: cleanText(
+      serviceSections[0]?.priorityActions?.[0]?.action ||
+      serviceSections[0]?.businessProblems?.[0]?.recommendedImprovement ||
+      ""
+    )
+  };
+}
+
+function emailFocusAreas(reportContext, lead) {
+  const labels = (reportContext?.selectedServices || []).map((item) => item.label).filter(Boolean).slice(0, 3);
+  if (labels.length) return naturalJoin(labels);
+  const serviceName = lead.serviceOpportunities?.[0]?.service?.name;
+  return serviceName || "a few of the main website opportunities";
+}
+
+function quickWinFromObservation(observation = {}) {
+  const combined = cleanText(`${observation.observation || ""} ${observation.description || ""} ${observation.title || ""} ${observation.impact || ""}`).toLowerCase();
+  if (/hero|above the fold|homepage/.test(combined)) return "making the homepage message and main CTA clearer above the fold";
+  if (/booking|appointment/.test(combined)) return "making the booking CTA easier to find, especially on mobile";
+  if (/contact|form|whatsapp|enquir|inquir/.test(combined)) return "making the contact path easier to spot without needing to scroll or search";
+  if (/reviews|testimonial|trust|credib/.test(combined)) return "bringing trust signals closer to the main contact or booking action";
+  if (/seo|service page|heading|metadata|local/.test(combined)) return "strengthening the key service pages and local search wording";
+  if (/mobile/.test(combined)) return "making the main CTA and contact options easier to use on mobile";
+  return "making the main next step clearer for visitors who are already interested";
+}
+
+function quickWinText(reportContext, observation) {
+  const value = cleanText(reportContext?.quickWin || quickWinFromObservation(observation)).replace(/[.]$/, "");
+  if (!value) return value;
+  const lower = `${value.charAt(0).toLowerCase()}${value.slice(1)}`;
+  return lower
+    .replace(/^rewrite\b/i, "rewriting")
+    .replace(/^add\b/i, "adding")
+    .replace(/^move\b/i, "moving")
+    .replace(/^strengthen\b/i, "strengthening")
+    .replace(/^create\b/i, "creating")
+    .replace(/^improve\b/i, "improving")
+    .replace(/^track\b/i, "tracking");
+}
+
+function businessTypePhrase(lead) {
+  const company = cleanText(lead.company).toLowerCase();
+  if (/\bclinic\b/.test(company)) return "a clinic like this";
+  if (/\bdental\b|\borthodont/i.test(company)) return "a dental clinic like this";
+  const raw = cleanText(lead.industry || lead.industryRef?.name || "");
+  if (!raw) return "a business like this";
+  if (raw.toLowerCase() === "healthcare") return "a clinic like this";
+  const lower = raw.toLowerCase();
+  const article = /^[aeiou]/.test(lower) ? "an" : "a";
+  return `${article} ${lower}`;
+}
+
+function impactSentence(impact) {
+  const cleaned = cleanText(impact).replace(/^that\s+/i, "").replace(/^this\s+/i, "").replace(/[.]$/, "");
+  if (!cleaned) return "may make it harder for visitors to understand what to do next";
+  const normalized = cleaned.charAt(0).toLowerCase() + cleaned.slice(1);
+  if (/^(can|could|may|might|makes|make|adds|create|creates|reduces|reduce)/i.test(normalized)) return normalized;
+  if (/^visitors may see\b/i.test(normalized)) return `may leave visitors with ${normalized.replace(/^visitors may see\s+/i, "")}`;
+  if (/^visitors may\b/i.test(normalized)) return `may leave visitors ${normalized.replace(/^visitors may\s+/i, "")}`;
+  if (/^(visitors|people|customers|clients|patients|prospects)\b/i.test(normalized)) return `may mean ${normalized}`;
+  return `could ${normalized}`;
+}
+
+function sanitizeObservationText(value, fallback = "") {
+  const cleaned = cleanText(value || fallback)
+    .replace(/^i\s+(noticed|found|saw)\s+(that\s+)?/i, "")
+    .replace(/^the scan did not find\s+/i, "there do not appear to be ")
+    .replace(/^the scan did not show\s+/i, "there does not appear to be ")
+    .replace(/^there\s+(is|are)\s+/i, "")
+    .replace(/^it\s+looks\s+like\s+/i, "")
+    .replace(/^what stood out was that\s+/i, "");
+  return cleaned || cleanText(fallback);
+}
+
+function sanitizeImpactText(value, fallback = "") {
+  const cleaned = cleanText(value || fallback)
+    .replace(/i attached a short website opportunity report.*$/i, "")
+    .replace(/attached a short website opportunity report.*$/i, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  return cleaned || cleanText(fallback);
+}
+
+function defaultImpactText(observation = {}) {
+  const note = Array.isArray(observation.notes) ? cleanText(observation.notes[0]) : "";
+  if (note) return note;
+  const combined = cleanText(`${observation.description || ""} ${observation.title || ""} ${observation.category || ""}`).toLowerCase();
+  if (/case-study|portfolio|project/.test(combined)) return "That may make it harder for visitors to build confidence before reaching out.";
+  if (/booking|appointment|contact|form|whatsapp/.test(combined)) return "That may make it harder for interested visitors to take the next step quickly.";
+  if (/seo|service page|local/.test(combined)) return "That may make it harder for the business to show up clearly for the searches that matter most.";
+  if (/trust|testimonial|review/.test(combined)) return "That may make it harder for new visitors to feel confident enough to enquire.";
+  return "That may make it harder for visitors to understand what to do next.";
+}
+
+function softCtaForLead(lead) {
+  return chooseStableVariant(lead.id || lead.company, [
+    "Would it be okay if I sent over a few suggestions on how we would improve this?",
+    "Would you be open to me sharing a few ideas on how this could be improved?",
+    "Happy to send over a quick breakdown if this is something you are looking at improving.",
+    "Would it be useful if I showed what a cleaner version of this flow could look like?"
+  ]);
+}
+
+function subjectForLeadEmail(lead, observation, quickWin) {
+  const company = cleanText(lead.company);
+  const combined = cleanText(`${observation?.observation || ""} ${observation?.description || ""} ${observation?.title || ""} ${quickWin || ""}`).toLowerCase();
+  if (/appointment|booking/.test(combined)) return "Quick idea for your appointment flow";
+  if (/contact|form|whatsapp|enquir|inquir/.test(combined)) return "Quick idea for your contact flow";
+  return chooseStableVariant(`${lead.id || ""}:${company}`, [
+    `Quick thought on ${company}`,
+    `Small website suggestion for ${company}`,
+    `Website improvement idea for ${company}`
+  ]);
 }
 
 function evidenceIsUsable(signal, desiredValue) {
@@ -862,6 +1009,7 @@ async function analyseAndRankObservations({ lead, sender, industry, consultantKn
 }
 
 function buildEmailWritingPrompt({ lead, sender, selectedObservation, selectedCompliment, industry }) {
+  const reportContext = reportContextFromLead(lead);
   return `Write a cold email using only the selected observation. Do not add new claims.
 
 Company: ${lead.company}
@@ -886,9 +1034,9 @@ ${JSON.stringify({
 Return strict JSON:
 {
   "emailVersions": [
-    { "style": "Professional", "subject": "", "observation": "", "impact": "" },
-    { "style": "Friendly", "subject": "", "observation": "", "impact": "" },
-    { "style": "Curious", "subject": "", "observation": "", "impact": "" }
+    { "style": "Professional", "subject": "", "observation": "", "impact": "", "quickWin": "", "cta": "" },
+    { "style": "Friendly", "subject": "", "observation": "", "impact": "", "quickWin": "", "cta": "" },
+    { "style": "Curious", "subject": "", "observation": "", "impact": "", "quickWin": "", "cta": "" }
   ]
 }
 
@@ -902,10 +1050,15 @@ Style:
 - No AI language.
 - Objective is a reply, not booking a meeting.
 - Never ask for a meeting.
-- Do not mention PDFs, reports, attachments, scores, or tech stack.
+- Each version should support an email around 90 to 140 words once assembled.
+- Use one specific website observation only.
+- Explain the business problem behind that observation in soft language.
+- Give one specific quick win only.
+- ${reportContext ? `A report will be attached. Include one natural sentence that says a short website opportunity report is attached and that it covers ${emailFocusAreas(reportContext, lead)}.` : "No report will be attached. Do not mention any report, PDF, or attachment."}
+- Use a low-pressure CTA only.
+- Do not use rude or sarcastic phrasing such as "Was that intentional?".
 - Every claim must trace to the selected observation evidence.
-- The observation should sound like: "I noticed something interesting about your business."
-- Use a soft CTA like: "I noted down a couple of other things while looking through the site too. Happy to send them over if it'd be useful."`;
+- Subject lines should be specific and non-spammy. Good examples: Quick thought on ${lead.company}, Small website suggestion for ${lead.company}, Quick idea for your appointment flow.`;
 }
 
 function observationFromSignal(signalKey, signal, correction = null) {
@@ -1190,6 +1343,7 @@ function assertValidEmailEvidence({ lead, selectedObservation, packet, industry 
 }
 
 function emailAiInput({ lead, packet, selectedCompliment, selectedObservation, industry, analysis = null }) {
+  const reportContext = reportContextFromLead(lead);
   return {
     companyName: lead.company,
     websiteUrl: lead.website,
@@ -1203,6 +1357,10 @@ function emailAiInput({ lead, packet, selectedCompliment, selectedObservation, i
     consultantKnowledge: analysis?.consultantKnowledge || null,
     selectedCompliment,
     selectedObservation,
+    reportContext: reportContext ? {
+      selectedServices: reportContext.selectedServices,
+      quickWin: reportContext.quickWin
+    } : null,
     candidateObservations: analysis?.observations || packet.observations || [],
     rankedObservations: analysis?.rankedObservations || packet.observations || [],
     analysisSource: analysis?.source || "local",
@@ -1219,31 +1377,44 @@ function logEmailAiInput(input) {
 function composeEvidenceEmail({ lead, sender, tone, selectedCompliment, selectedObservation, rewrite = {} }) {
   const compliment = selectedCompliment?.compliment || "";
   const observation = selectedObservation;
-  const rewrittenObservation = safeEmailText(rewrite.observation || observation.observation || observation.description || observation.title);
-  const rewrittenImpact = safeEmailText(rewrite.impact || observation.impact || "That may be worth looking at because it affects how clearly visitors understand the next step.");
+  const reportContext = reportContextFromLead(lead);
+  const rewrittenObservation = safeEmailText(sanitizeObservationText(observation.observation || observation.description || observation.title));
+  const rewrittenImpact = safeEmailText(sanitizeImpactText(observation.impact || defaultImpactText(observation), "That may make it harder for visitors to understand what to do next."));
+  const quickWin = safeEmailText(quickWinText(reportContext, observation));
+  const reportSentence = reportContext
+    ? `I attached a short website opportunity report with a few specific improvements around ${emailFocusAreas(reportContext, lead)}.`
+    : "";
+  const cta = safeEmailText(softCtaForLead(lead));
   const intro = `I'm ${sender.senderName} from ${sender.companyName}.`;
-  const cta = "Was that intentional?";
   const observationLine = `One thing that stood out was that ${rewrittenObservation.replace(/\.$/, "")}.`;
-  const body = [
+  const senderName = cleanText(sender.senderName || "").replace(/\b\w/g, (char) => char.toUpperCase());
+  const bodyLines = [
     `Hi ${firstNameFromLead(lead)},`,
     "",
-    `I came across ${lead.company}'s website earlier today.`,
+    `I spent a few minutes reviewing the ${lead.company} website and noticed that ${rewrittenObservation.replace(/\.$/, "")}.`,
     "",
-    `What stood out was that ${rewrittenObservation.replace(/\.$/, "")}.`,
+    `For ${businessTypePhrase(lead)}, this ${impactSentence(rewrittenImpact)}.`,
     "",
-    rewrittenImpact,
+    reportSentence || null,
+    reportSentence ? "" : null,
+    `One quick win would be ${quickWin.replace(/\.$/, "")}.`,
     "",
     cta,
     "",
-    sender.signature
+    "Thanks,",
+    senderName || sender.signature
+  ].filter((line) => line !== null);
+  const body = [
+    ...bodyLines
   ].join("\n");
 
   return {
-    subject: `Quick thought about ${lead.company}`,
+    subject: safeEmailText(subjectForLeadEmail(lead, observation, quickWin)),
     compliment,
     observation: observationLine,
     impact: rewrittenImpact,
     intro,
+    quickWin,
     cta,
     fullMessage: safeEmailText(body),
     tone
@@ -1430,6 +1601,7 @@ Return strict JSON only:
   "compliment": "",
   "observation": "",
   "impact": "",
+  "quickWin": "",
   "intro": "",
   "cta": "",
   "emailBody": ""
@@ -1464,23 +1636,29 @@ One thing that stood out, though, was:
 
 {{impact}}
 
-There were another couple of things I noticed that could be worth looking at too.
+${aiInput.reportContext ? `I attached a short website opportunity report with a few specific improvements around ${emailFocusAreas(aiInput.reportContext, lead)}.` : ""}
 
-Would it be helpful if I sent them over?
+One quick win would be:
+
+{{quickWin}}
+
+{{cta}}
 
 Best,
 
 ${sender.signature}
 
 Strict rules:
-- 45 to 120 words.
+- 90 to 140 words.
 - Natural English.
 - Mention one observation only.
 - Use the selected observation above. Do not create a different observation.
-- Explain it as an interesting business opportunity, not as a generic missing-feature critique.
+- Explain the business problem behind it in a calm, business-focused way.
+- Give one specific quick win.
 - Do not ask for a meeting.
-- Do not mention PDFs, reports, attachments, scores, or tech stack.
+- ${aiInput.reportContext ? "Mention the attached report exactly once." : "Do not mention any report, PDF, or attachment."}
 - Do not use "increase revenue", "boost conversions", "industry-leading", "cutting-edge", "AI-powered", or hype.
+- Do not use phrases like "Was that intentional?", "your website has problems", or "you are losing customers".
 - Do not fabricate compliments.
 - Do not fabricate observations.
 - Every business-specific claim must trace to the selected compliment or selected observation evidence above.
@@ -1572,6 +1750,8 @@ function parseGeneratedEmailVersions(parsed, fallbackVersions, aiInput, { lead, 
     const source = sourceVersions.find((item) => item.style === style) || sourceVersions[index] || {};
     const rewrittenObservation = safeEmailText(source.observation || aiInput.selectedObservation.description || aiInput.selectedObservation.title);
     const rewrittenImpact = safeEmailText(source.impact || aiInput.selectedObservation.impact || "");
+    const rewrittenQuickWin = safeEmailText(source.quickWin || aiInput.reportContext?.quickWin || "");
+    const rewrittenCta = safeEmailText(source.cta || "");
     const rewriteUsesSuppressedIndustry = emailMentionsSuppressedIndustry(`${rewrittenObservation}\n${rewrittenImpact}`, aiInput);
     const version = composeEmailVersion({
       lead,
@@ -1581,7 +1761,10 @@ function parseGeneratedEmailVersions(parsed, fallbackVersions, aiInput, { lead, 
       selectedObservation: aiInput.selectedObservation,
       rewrite: rewriteUsesSuppressedIndustry ? {} : {
         observation: rewrittenObservation,
-        impact: rewrittenImpact
+        impact: rewrittenImpact,
+        quickWin: rewrittenQuickWin,
+        cta: rewrittenCta,
+        subject: safeEmailText(source.subject || "")
       },
       style
     });
@@ -1633,6 +1816,7 @@ async function leadContext(leadId) {
     where: { id: leadId },
     include: {
       issues: { orderBy: { createdAt: "asc" } },
+      auditReports: { orderBy: { createdAt: "desc" }, take: 1 },
       evidenceCorrections: { orderBy: { updatedAt: "desc" } },
       industryRef: true,
       serviceOpportunities: {

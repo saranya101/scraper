@@ -1,5 +1,5 @@
-export const EMAIL_WORD_MIN = 45;
-export const EMAIL_WORD_MAX = 120;
+export const EMAIL_WORD_MIN = 100;
+export const EMAIL_WORD_MAX = 150;
 
 export function countEmailWords(body = "") {
   return String(body || "").trim().split(/\s+/).filter(Boolean).length;

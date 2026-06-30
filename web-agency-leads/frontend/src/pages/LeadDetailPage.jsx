@@ -1,10 +1,12 @@
-import { ArrowLeft, ArrowUpRight, Clipboard, Cpu, DollarSign, GitCompare, Globe2, History, Mail, MailCheck, MailPlus, MapPin, MessageCircle, Pencil, Phone, Plus, Search, ShieldCheck, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, Clipboard, Cpu, DollarSign, FileText, GitCompare, Globe2, History, Mail, MailCheck, MailPlus, MapPin, MessageCircle, Pencil, Phone, Plus, Search, ShieldCheck, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import LeadFormModal from "../components/LeadFormModal.jsx";
+import ReportServiceSelector from "../components/ReportServiceSelector.jsx";
 import ScreenshotPreview from "../components/ScreenshotPreview.jsx";
 import { Badge } from "../components/ui/Badge.jsx";
 import { Button } from "../components/ui/Button.jsx";
+import { DEFAULT_REPORT_SERVICE_IDS, REPORT_SERVICE_OPTIONS } from "../constants/reportServices.js";
 import { Input, Select, Textarea } from "../components/ui/Input.jsx";
 import { useToast } from "../hooks/useToast.jsx";
 import { api } from "../services/api.js";
@@ -90,6 +92,10 @@ export default function LeadDetailPage() {
   const [evidence, setEvidence] = useState(null);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
   const [correctionDrafts, setCorrectionDrafts] = useState({});
+  const [report, setReport] = useState(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportAction, setReportAction] = useState("");
+  const [reportServices, setReportServices] = useState(DEFAULT_REPORT_SERVICE_IDS);
 
   async function loadLead() {
     setLoading(true);
@@ -134,6 +140,23 @@ export default function LeadDetailPage() {
     setEvidence(data);
   }
 
+  async function loadReport() {
+    setReportLoading(true);
+    try {
+      const { data } = await api.get(`/leads/${id}/report`);
+      setReport(data);
+      setReportServices((data?.selectedServices || []).map((item) => item.id).filter(Boolean).length ? data.selectedServices.map((item) => item.id) : DEFAULT_REPORT_SERVICE_IDS);
+    } catch (error) {
+      if (error.response?.status !== 404) {
+        push(error.response?.data?.message || "Could not load report", "error");
+      }
+      setReport(null);
+      setReportServices(DEFAULT_REPORT_SERVICE_IDS);
+    } finally {
+      setReportLoading(false);
+    }
+  }
+
   useEffect(() => {
     loadLead();
   }, [id]);
@@ -143,7 +166,58 @@ export default function LeadDetailPage() {
     loadCompetitors().catch(() => {});
     loadEmailHistory().catch(() => {});
     loadEvidence().catch(() => {});
+    loadReport().catch(() => {});
   }, [id]);
+
+  async function generateReport(mode = "generate") {
+    if (!reportServices.length) return push("Please select at least one service to include in the report.", "error");
+    setReportAction(mode);
+    try {
+      const endpoint = mode === "regenerate" ? `/leads/${id}/report/regenerate` : `/leads/${id}/report/generate`;
+      const { data } = await api.post(endpoint, { selectedServices: reportServices });
+      setReport(data);
+      setReportServices((data?.selectedServices || []).map((item) => item.id).filter(Boolean).length ? data.selectedServices.map((item) => item.id) : reportServices);
+      push(mode === "regenerate" ? "Report regenerated" : "Report generated");
+      await Promise.all([loadLead(), loadEmailHistory()]);
+    } catch (error) {
+      push(error.response?.data?.message || "Could not generate report", "error");
+    } finally {
+      setReportAction("");
+    }
+  }
+
+  async function approveReport() {
+    setReportAction("approve");
+    try {
+      const { data } = await api.post(`/leads/${id}/report/approve`);
+      setReport(data);
+      push("Report approved");
+      await loadEmailHistory();
+    } catch (error) {
+      push(error.response?.data?.message || "Could not approve report", "error");
+    } finally {
+      setReportAction("");
+    }
+  }
+
+  function openAndDownloadReport() {
+    if (!report?.previewUrl || !report?.downloadUrl) {
+      push(report?.status === "failed" || report?.status === "failed_quality_gate"
+        ? "Report generation failed. Please regenerate the report."
+        : "Report has not been generated yet.", "error");
+      return;
+    }
+    const previewWindow = window.open(report.previewUrl, "_blank", "noopener,noreferrer");
+    const link = document.createElement("a");
+    link.href = report.downloadUrl;
+    link.download = "";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    if (!previewWindow) {
+      push("The report was downloaded. If the preview did not open, please allow popups for this site.", "error");
+    }
+  }
 
   async function updateStatus(status) {
     const { data } = await api.put(`/leads/${id}`, { ...lead, status, issues: lead.issues.map((issue) => issue.issueText) });
@@ -322,6 +396,16 @@ export default function LeadDetailPage() {
     ...evidenceOrder.filter((key) => evidenceSignals[key]),
     ...Object.keys(evidenceSignals).filter((key) => !evidenceOrder.includes(key))
   ].map((key) => evidenceSignals[key]);
+  const reportStatusTone = {
+    approved: "bg-emerald-100 text-emerald-800 ring-emerald-200",
+    generated: "bg-blue-100 text-blue-800 ring-blue-200",
+    attached: "bg-indigo-100 text-indigo-800 ring-indigo-200",
+    sent: "bg-violet-100 text-violet-800 ring-violet-200",
+    failed: "bg-rose-100 text-rose-700 ring-rose-200",
+    failed_quality_gate: "bg-amber-100 text-amber-800 ring-amber-200",
+    generating: "bg-slate-100 text-slate-700 ring-slate-200"
+  };
+  const serviceLabelsById = Object.fromEntries(REPORT_SERVICE_OPTIONS.map((service) => [service.id, service.label]));
 
   return (
     <div className="space-y-6">
@@ -587,6 +671,89 @@ export default function LeadDetailPage() {
 
         <aside className="min-w-0 space-y-6">
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="flex items-center gap-2 text-lg font-semibold"><FileText size={18} /> Opportunity report</h2>
+                <p className="mt-1 text-sm text-slate-500">Generate, review, approve, and attach a client-facing PDF report for this lead.</p>
+              </div>
+              <Badge className={reportStatusTone[report?.status] || "bg-slate-100 text-slate-700 ring-slate-200"}>{report?.status || (reportLoading ? "loading" : "missing")}</Badge>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Generated</p>
+                <p className="mt-1 font-semibold">{report?.generatedAt ? formatDate(report.generatedAt) : "Not generated"}</p>
+              </div>
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Quality gate</p>
+                <p className="mt-1 font-semibold">{report?.qualityPassed ? "Passed" : report?.qualityGate?.failedChecks?.length ? "Failed" : "Not checked"}</p>
+              </div>
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Opportunity / Confidence</p>
+                <p className="mt-1 font-semibold">{report ? `${report.opportunityScore || "-"} / ${report.confidenceScore || "-"}` : "-"}</p>
+              </div>
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Sections / Screenshots</p>
+                <p className="mt-1 font-semibold">{report ? `${report.serviceSections?.length || 0} sections • ${report.screenshotStatus || "missing"}` : "-"}</p>
+              </div>
+            </div>
+            <div className="mt-4">
+              <ReportServiceSelector value={reportServices} onChange={setReportServices} />
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {reportServices.map((serviceId) => (
+                <Badge key={serviceId} className="bg-slate-100 text-slate-700 ring-slate-200">{serviceLabelsById[serviceId] || serviceId}</Badge>
+              ))}
+            </div>
+            {report?.summary && <p className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm leading-6 text-slate-600">{report.summary}</p>}
+            {report?.qualityGate?.failedChecks?.length ? (
+              <div className="mt-4 rounded-2xl bg-amber-50 p-4 text-sm text-amber-800">
+                Quality gate blocked this report: {report.qualityGate.failedChecks.join(", ")}
+              </div>
+            ) : null}
+            {report?.error && !report?.qualityPassed && (
+              <div className="mt-4 rounded-2xl bg-rose-50 p-4 text-sm text-rose-700">{report.error}</div>
+            )}
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button onClick={() => generateReport("generate")} disabled={reportAction === "generate" || reportAction === "regenerate"}>
+                {reportAction === "generate" ? "Generating..." : "Generate Report"}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={openAndDownloadReport}
+                disabled={!report?.previewUrl || !report?.downloadUrl || !["generated", "approved", "attached", "sent"].includes(report?.status || "")}
+              >
+                Open & Download PDF
+              </Button>
+              <Button variant="secondary" onClick={() => generateReport("regenerate")} disabled={reportAction === "generate" || reportAction === "regenerate"}>
+                {reportAction === "regenerate" ? "Regenerating..." : "Regenerate"}
+              </Button>
+              <Button variant="secondary" onClick={approveReport} disabled={!report?.qualityPassed || reportAction === "approve"}>
+                {reportAction === "approve" ? "Approving..." : "Approve Report"}
+              </Button>
+            </div>
+            {report?.serviceSections?.length ? (
+              <div className="mt-4 space-y-3">
+                {report.serviceSections.map((section, index) => (
+                  <div key={section.serviceId || index} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="font-semibold text-slate-950">{section.serviceLabel}</p>
+                    <p className="mt-1 text-sm text-slate-600">{section.serviceSummary}</p>
+                    <p className="mt-3 text-xs uppercase tracking-wide text-slate-400">Priority actions</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {(section.priorityActions || []).map((action, actionIndex) => (
+                        <Badge key={`${section.serviceId}-${actionIndex}`} className="bg-white text-slate-700 ring-slate-200">{action.priority}: {action.action}</Badge>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <details className="mt-4">
+              <summary className="cursor-pointer text-sm font-semibold text-slate-500">Debug view</summary>
+              <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded-2xl bg-slate-950 p-4 text-xs text-slate-100">{JSON.stringify(report?.debugData || report || {}, null, 2)}</pre>
+            </details>
+          </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="mb-4 flex items-center justify-between gap-3">
               <h2 className="flex items-center gap-2 text-lg font-semibold"><MessageCircle size={18} /> Contact details</h2>
               <Badge className={(lead.contactConfidence || 0) >= 70 ? "bg-emerald-100 text-emerald-800 ring-emerald-200" : (lead.contactConfidence || 0) >= 45 ? "bg-amber-100 text-amber-800 ring-amber-200" : "bg-slate-100 text-slate-700 ring-slate-200"}>{lead.contactConfidence || 0}% confidence</Badge>
@@ -815,6 +982,7 @@ export default function LeadDetailPage() {
                   <div>
                     <p className="font-semibold">{send.subject}</p>
                     <p className="mt-1 text-sm text-slate-500">To {send.toEmail} from {send.emailAccount?.email || emailHistory.connectedAccounts?.[0]?.email || "hello@ocia.studio"}</p>
+                    {send.auditReport && <p className="mt-1 text-xs text-slate-400">Attached report: {send.auditReport.status}</p>}
                   </div>
                   <Badge className={send.status === "SENT" ? "bg-emerald-100 text-emerald-800 ring-emerald-200" : send.status === "FAILED" ? "bg-rose-100 text-rose-700 ring-rose-200" : "bg-slate-100 text-slate-700 ring-slate-200"}>
                     {send.status}

@@ -17,6 +17,14 @@ const includeLead = {
     include: { user: { select: { id: true, name: true, email: true } } }
   },
   screenshots: { orderBy: { createdAt: "desc" } },
+  auditReports: {
+    orderBy: { createdAt: "desc" },
+    take: 5
+  },
+  emailSends: {
+    orderBy: { createdAt: "desc" },
+    take: 10
+  },
   serviceOpportunities: {
     include: { service: true },
     orderBy: [{ recommended: "desc" }, { score: "desc" }]
@@ -222,6 +230,10 @@ export async function listLeads(query) {
           take: 1
         },
         assignedTo: { select: { id: true, name: true, email: true } },
+        auditReports: {
+          orderBy: { createdAt: "desc" },
+          take: 1
+        },
         _count: { select: { notes: true } }
       }
     }),

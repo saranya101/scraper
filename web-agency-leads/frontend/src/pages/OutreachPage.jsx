@@ -1,8 +1,10 @@
-import { AlertTriangle, CheckCircle, ChevronLeft, ChevronRight, Clipboard, Loader2, Play, RefreshCw, RotateCcw, Send, SkipForward, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle, ChevronLeft, ChevronRight, Clipboard, FileText, Loader2, Play, RefreshCw, RotateCcw, Send, SkipForward, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import ReportServiceSelector from "../components/ReportServiceSelector.jsx";
 import { Badge } from "../components/ui/Badge.jsx";
 import { Button } from "../components/ui/Button.jsx";
+import { DEFAULT_REPORT_SERVICE_IDS, REPORT_SERVICE_OPTIONS } from "../constants/reportServices.js";
 import { Input, Select, Textarea } from "../components/ui/Input.jsx";
 import { useAuth } from "../hooks/useAuth.jsx";
 import { useToast } from "../hooks/useToast.jsx";
@@ -146,7 +148,39 @@ function normalizeEmailBody(body = "", company = "") {
     .trim();
 }
 
-function assembleEmail({ draft, sender, lead, template, observation }) {
+function naturalJoin(items = []) {
+  const list = items.filter(Boolean);
+  if (!list.length) return "";
+  if (list.length === 1) return list[0];
+  if (list.length === 2) return `${list[0]} and ${list[1]}`;
+  return `${list.slice(0, -1).join(", ")}, and ${list.at(-1)}`;
+}
+
+function normalizedServiceIds(items = []) {
+  return [...new Set(items.filter(Boolean))].sort();
+}
+
+function sameServiceSelection(left = [], right = []) {
+  const a = normalizedServiceIds(left);
+  const b = normalizedServiceIds(right);
+  return a.length === b.length && a.every((item, index) => item === b[index]);
+}
+
+function reportSentence(selectedServices = []) {
+  const focusAreas = naturalJoin(selectedServices.map((item) => item.label).filter(Boolean).slice(0, 3));
+  return focusAreas
+    ? `I attached a short website opportunity report with a few specific improvements around ${focusAreas}.`
+    : "I attached a short website opportunity report with a few specific suggestions.";
+}
+
+function appendReportSentence(body = "", shouldIncludeReport = false, selectedServices = []) {
+  const next = String(body || "").trim();
+  if (!shouldIncludeReport) return next;
+  if (/attached a short website opportunity report/i.test(next)) return next;
+  return [next, reportSentence(selectedServices)].filter(Boolean).join("\n\n");
+}
+
+function assembleEmail({ draft, sender, lead, template, observation, includeReport = false, selectedServices = [] }) {
   const context = {
     contact: { firstName: firstName(lead), name: lead?.ownerName || "" },
     company: { name: lead?.company || "", website: lead?.website || "" },
@@ -155,10 +189,11 @@ function assembleEmail({ draft, sender, lead, template, observation }) {
     observation: { category: observation?.category || "" }
   };
   const activeTemplate = { ...defaultTemplate, ...(template || {}) };
+  const generatedBody = appendReportSentence(String(draft.body || "").trim(), includeReport, selectedServices);
   const body = [
     renderTemplate(activeTemplate.greetingTemplate, context),
     renderTemplate(activeTemplate.openingLineTemplate, context),
-    String(draft.body || "").trim(),
+    generatedBody,
     renderTemplate(activeTemplate.closingQuestionTemplate, context),
     renderTemplate(activeTemplate.signOffTemplate, context),
     renderTemplate(activeTemplate.signatureTemplate, context)
@@ -189,6 +224,12 @@ export default function OutreachPage() {
   const [draft, setDraft] = useState({ fromName: "", fromEmail: "", toEmail: "", subject: "", body: "" });
   const [testEmail, setTestEmail] = useState("");
   const [sendingTest, setSendingTest] = useState(false);
+  const [report, setReport] = useState(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportAction, setReportAction] = useState("");
+  const [reportServices, setReportServices] = useState(DEFAULT_REPORT_SERVICE_IDS);
+  const [batchReportServices, setBatchReportServices] = useState(DEFAULT_REPORT_SERVICE_IDS);
+  const [includeReport, setIncludeReport] = useState(true);
   const [deleteAllOpen, setDeleteAllOpen] = useState(false);
   const [deleteAllText, setDeleteAllText] = useState("");
   const [deletingAll, setDeletingAll] = useState(false);
@@ -203,8 +244,30 @@ export default function OutreachPage() {
   const gmailReady = Boolean(gmailSender?.configured && gmailSender?.active);
   const activeSender = composerSender(senderProfile, gmailSender, outreachPersona);
   const draftSender = { ...activeSender, name: draft.fromName, email: draft.fromEmail };
-  const finalBody = assembleEmail({ draft, sender: draftSender, lead: selectedLead, template: emailTemplate, observation });
+  const reportReady = Boolean(report?.canAttach);
+  const serviceLabelsById = Object.fromEntries(REPORT_SERVICE_OPTIONS.map((service) => [service.id, service.label]));
+  const emailSelectedServiceIds = currentResult?.emailSelectedServices || currentState?.emailSelectedServices || [];
+  const previewReportServices = (report?.selectedServices || [])
+    .map((item) => ({ id: item.id, label: item.label }))
+    .filter((item) => item.id && item.label)
+    .length
+    ? (report?.selectedServices || []).map((item) => ({ id: item.id, label: item.label }))
+    : reportServices.map((serviceId) => ({ id: serviceId, label: serviceLabelsById[serviceId] || serviceId }));
+  const finalBody = assembleEmail({
+    draft,
+    sender: draftSender,
+    lead: selectedLead,
+    template: emailTemplate,
+    observation,
+    includeReport: includeReport && reportReady,
+    selectedServices: previewReportServices
+  });
   const fullEmail = draft.subject ? `Subject: ${draft.subject}\n\n${finalBody}` : finalBody;
+  const selectedReportFocus = naturalJoin(reportServices.map((serviceId) => serviceLabelsById[serviceId] || serviceId));
+  const emailServiceMismatch = Boolean(reportServices.length && !sameServiceSelection(emailSelectedServiceIds, reportServices));
+  const attachmentFocusText = selectedReportFocus
+    ? `Email will include the approved PDF report focused on ${selectedReportFocus}.`
+    : "Email will include the approved PDF report.";
 
   const params = useMemo(() => {
     const next = { limit: 100 };
@@ -256,6 +319,22 @@ export default function OutreachPage() {
     }
   }
 
+  async function loadReportForLead(leadId) {
+    if (!leadId) return setReport(null);
+    setReportLoading(true);
+    try {
+      const { data } = await api.get(`/leads/${leadId}/report`);
+      setReport(data);
+      setReportServices((data?.selectedServices || []).map((item) => item.id).filter(Boolean).length ? data.selectedServices.map((item) => item.id) : DEFAULT_REPORT_SERVICE_IDS);
+    } catch (error) {
+      if (error.response?.status !== 404) push(error.response?.data?.message || "Could not load report", "error");
+      setReport(null);
+      setReportServices(DEFAULT_REPORT_SERVICE_IDS);
+    } finally {
+      setReportLoading(false);
+    }
+  }
+
   useEffect(() => {
     const timer = setTimeout(() => loadData(), 200);
     return () => clearTimeout(timer);
@@ -280,7 +359,16 @@ export default function OutreachPage() {
       subject: savedDraft?.subject || sourceEmail.subject || "",
       body: savedDraft?.body || cleanGeneratedBody(sourceEmail.body || "")
     });
+    setReport(selectedLead.auditReports?.[0] || null);
   }, [selectedLead?.id, senderProfile?.id, gmailSender?.email, outreachPersona?.enabled, outreachPersona?.assistantName, outreachPersona?.assistantEmail]);
+
+  useEffect(() => {
+    loadReportForLead(selectedLead?.id).catch(() => {});
+  }, [selectedLead?.id]);
+
+  useEffect(() => {
+    setIncludeReport(Boolean(report?.canAttach));
+  }, [report?.id, report?.canAttach]);
 
   useEffect(() => {
     if (!selectedLead?.id) return;
@@ -327,17 +415,27 @@ export default function OutreachPage() {
       setLeadWorkflow(lead.id, { ...pipelineState(lead), status: "GENERATING_EMAIL", label: "Generating Email" });
     }, 900);
     try {
+      const selectedServicesForLead = lead.id === selectedLead?.id ? reportServices : batchReportServices;
       const { data } = await api.post("/outreach/pipeline", {
         leadId: lead.id,
         company: { name: lead.company, website: lead.website },
         industry: lead.industryRef?.name || lead.industry || "",
-        sender: { name: activeSender.name, title: activeSender.title, company: activeSender.company }
+        sender: { name: activeSender.name, title: activeSender.title, company: activeSender.company },
+        selectedServices: selectedServicesForLead
       });
       setLeadWorkflow(lead.id, data.pipelineState || { status: data.status === "approved" ? "APPROVED" : data.status === "no_suitable_angle" ? "NO_SUITABLE_ANGLE" : "NEEDS_REVIEW", result: data });
       if (lead.id === selectedLead?.id) {
         setPipelineResult(data);
         setComposerFromResult(lead, data);
+        if (data.report) {
+          setReport(data.report);
+          const returnedServices = (data.report.selectedServices || []).map((item) => item.id).filter(Boolean);
+          if (returnedServices.length) setReportServices(returnedServices);
+        } else if (data.status === "approved") {
+          await loadReportForLead(lead.id);
+        }
       }
+      if (data.status === "approved" && data.reportError) push(`Email approved, but the PDF report failed: ${data.reportError}`, "error");
       if (data.status === "approved") push("Email approved for review");
       if (data.status === "no_suitable_angle") push("No suitable angle found", "error");
       return data;
@@ -357,6 +455,7 @@ export default function OutreachPage() {
     try {
       const { data } = await api.post("/outreach/pipeline/draft", {
         leadId: selectedLead.id,
+        emailSelectedServices: reportServices,
         draft: { ...draft, fullEmail: finalBody }
       });
       setLeadWorkflow(selectedLead.id, data);
@@ -405,6 +504,7 @@ export default function OutreachPage() {
     if (!draft.toEmail) return push("Add a recipient email first", "error");
     if (!draft.subject) return push("Add a subject first", "error");
     if (!draft.body.trim()) return push("Add an email body first", "error");
+    if (emailServiceMismatch) return push("Email does not match the selected report services. Regenerate email before sending.", "error");
     setSending(true);
     try {
       const saved = await saveDraft();
@@ -414,6 +514,8 @@ export default function OutreachPage() {
         toEmail: draft.toEmail,
         subject: draft.subject,
         body: finalBody,
+        includeReport,
+        emailSelectedServices: reportServices,
         fromName: draft.fromName,
         fromEmail: draft.fromEmail,
         senderTitle: activeSender.title,
@@ -424,6 +526,7 @@ export default function OutreachPage() {
       if (data.status === "SENT") {
         push("Email sent");
         await loadData();
+        await loadReportForLead(selectedLead.id);
         moveLead(1);
       } else {
         push(data.errorMessage || "Email send failed", "error");
@@ -440,6 +543,7 @@ export default function OutreachPage() {
     if (!testEmail) return push("Add a test email first", "error");
     if (!draft.subject) return push("Add a subject first", "error");
     if (!draft.body.trim()) return push("Add an email body first", "error");
+    if (emailServiceMismatch) return push("Email does not match the selected report services. Regenerate email before sending.", "error");
     setSendingTest(true);
     try {
       const saved = await saveDraft();
@@ -454,7 +558,9 @@ export default function OutreachPage() {
         companyName: selectedLead.company,
         toEmail: testEmail,
         subject: draft.subject,
-        body: finalBody
+        body: finalBody,
+        includeReport,
+        emailSelectedServices: reportServices
       });
       if (data.status === "SENT") push(`Test email sent to ${testEmail}`);
       else push(data.errorMessage || "Test email failed", "error");
@@ -515,6 +621,57 @@ export default function OutreachPage() {
     setSelectedIds((current) => current.includes(leadId) ? current.filter((id) => id !== leadId) : [...current, leadId]);
   }
 
+  async function generateReportForSelected(mode = "generate") {
+    if (!selectedLead) return push("Select a lead first", "error");
+    if (!reportServices.length) return push("Please select at least one service to include in the report.", "error");
+    setReportAction(mode);
+    try {
+      const { data } = await api.post(mode === "regenerate" ? `/leads/${selectedLead.id}/report/regenerate` : `/leads/${selectedLead.id}/report/generate`, {
+        selectedServices: reportServices
+      });
+      setReport(data);
+      setReportServices((data?.selectedServices || []).map((item) => item.id).filter(Boolean).length ? data.selectedServices.map((item) => item.id) : reportServices);
+      push(mode === "regenerate" ? "Report regenerated" : "Report generated");
+    } catch (error) {
+      push(error.response?.data?.message || "Could not generate report", "error");
+    } finally {
+      setReportAction("");
+    }
+  }
+
+  async function approveSelectedReport() {
+    if (!selectedLead) return push("Select a lead first", "error");
+    setReportAction("approve");
+    try {
+      const { data } = await api.post(`/leads/${selectedLead.id}/report/approve`);
+      setReport(data);
+      push("Report approved");
+    } catch (error) {
+      push(error.response?.data?.message || "Could not approve report", "error");
+    } finally {
+      setReportAction("");
+    }
+  }
+
+  function openAndDownloadReport() {
+    if (!report?.previewUrl || !report?.downloadUrl) {
+      push(report?.status === "failed" || report?.status === "failed_quality_gate"
+        ? "Report generation failed. Please regenerate the report."
+        : "Report has not been generated yet.", "error");
+      return;
+    }
+    const previewWindow = window.open(report.previewUrl, "_blank", "noopener,noreferrer");
+    const link = document.createElement("a");
+    link.href = report.downloadUrl;
+    link.download = "";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    if (!previewWindow) {
+      push("The report was downloaded. If the preview did not open, please allow popups for this site.", "error");
+    }
+  }
+
   return (
     <div className="space-y-5 text-slate-950 dark:text-slate-50">
       <div className="flex flex-col gap-4 rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 md:flex-row md:items-end md:justify-between">
@@ -566,10 +723,17 @@ export default function OutreachPage() {
               <Button variant="secondary" disabled={!selectedIds.length || batch?.running} onClick={() => runBatch("selected")}>Run selected</Button>
               <Button variant="secondary" disabled={!visibleLeads.length || batch?.running} onClick={() => runBatch("all")}>Run all</Button>
             </div>
+            <details className="rounded-2xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/60">
+              <summary className="cursor-pointer text-sm font-semibold">Batch report services</summary>
+              <div className="mt-3">
+                <ReportServiceSelector value={batchReportServices} onChange={setBatchReportServices} label="Default services for generated reports" />
+              </div>
+            </details>
           </div>
           <div className="mt-4 max-h-[calc(100vh-330px)] min-h-96 space-y-2 overflow-auto pr-1">
             {visibleLeads.map((lead) => {
               const state = pipelineState(lead);
+              const leadReport = lead.auditReports?.[0] || null;
               return (
                 <div ref={(node) => { if (node) leadRefs.current[lead.id] = node; }} key={lead.id} className={`rounded-2xl border p-3 transition ${selectedLead?.id === lead.id ? "border-slate-950 bg-slate-50 dark:border-white dark:bg-slate-800/80" : "border-slate-200 bg-white hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:hover:bg-slate-800"}`}>
                   <div className="flex gap-3">
@@ -586,6 +750,9 @@ export default function OutreachPage() {
                       <div className="mt-3 flex flex-wrap gap-2">
                         {statusBadge(state.status)}
                         {state.qualityScore && <Badge className="bg-white text-slate-700 ring-slate-200 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-700">Q {state.qualityScore}/10</Badge>}
+                        <Badge className={leadReport?.status === "approved" || leadReport?.status === "attached" || leadReport?.status === "sent" ? "bg-emerald-100 text-emerald-800 ring-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-100 dark:ring-emerald-800" : leadReport?.status === "failed" || leadReport?.status === "failed_quality_gate" ? "bg-rose-100 text-rose-800 ring-rose-200 dark:bg-rose-950/60 dark:text-rose-100 dark:ring-rose-800" : "bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700"}>
+                          Report: {leadReport?.status || "missing"}
+                        </Badge>
                       </div>
                     </button>
                   </div>
@@ -661,6 +828,57 @@ export default function OutreachPage() {
             ) : <p className={`text-sm ${textMuted}`}>Quality Gate has not run for this lead yet.</p>}
           </Panel>
 
+          <Panel title="Report">
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge className={report?.qualityPassed ? workflowClasses.APPROVED : report?.status === "failed_quality_gate" ? workflowClasses.NEEDS_REVIEW : workflowClasses.NOT_ANALYSED}>
+                  {report?.status || (reportLoading ? "loading" : "missing")}
+                </Badge>
+                {report?.opportunityScore != null && <Badge className="bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700">Opportunity {report.opportunityScore}/10</Badge>}
+                {report?.confidenceScore != null && <Badge className="bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700">Confidence {report.confidenceScore}/100</Badge>}
+              </div>
+              <p className={`text-sm leading-6 ${textMuted}`}>{report?.summary || "Generate a website opportunity report to attach something concrete and useful with the outreach email."}</p>
+              <ReportServiceSelector value={reportServices} onChange={setReportServices} />
+              <div className="flex flex-wrap gap-2">
+                {reportServices.map((serviceId) => (
+                  <Badge key={serviceId} className="bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700">{serviceLabelsById[serviceId] || serviceId}</Badge>
+                ))}
+              </div>
+              <div className={`rounded-2xl border p-4 ${reportReady ? "border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-100" : "border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950/60"}`}>
+                <p className="text-sm font-semibold">Attachment status</p>
+                <p className="mt-1 text-sm">{reportReady ? `This report is approved and can be attached when you send. Focus: ${selectedReportFocus || "selected services"}.` : "This lead does not have an approved attachable report yet."}</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="secondary" disabled={reportAction === "generate" || reportAction === "regenerate"} onClick={() => generateReportForSelected("generate")}><FileText size={16} /> {reportAction === "generate" ? "Generating..." : "Generate Report"}</Button>
+                <Button
+                  variant="secondary"
+                  disabled={!report?.previewUrl || !report?.downloadUrl || !["generated", "approved", "attached", "sent"].includes(report?.status || "")}
+                  onClick={openAndDownloadReport}
+                >
+                  Open & Download PDF
+                </Button>
+                <Button variant="secondary" disabled={reportAction === "generate" || reportAction === "regenerate"} onClick={() => generateReportForSelected("regenerate")}>{reportAction === "regenerate" ? "Regenerating..." : "Regenerate"}</Button>
+                <Button variant="secondary" disabled={!report?.qualityPassed || reportAction === "approve"} onClick={approveSelectedReport}>{reportAction === "approve" ? "Approving..." : "Approve Report"}</Button>
+              </div>
+              {report?.qualityGate?.failedChecks?.length ? <p className="text-sm text-amber-700 dark:text-amber-300">Quality gate: {report.qualityGate.failedChecks.join(", ")}</p> : null}
+              {emailServiceMismatch ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+                  Email does not match the selected report services. Regenerate email before sending.
+                </div>
+              ) : null}
+              {report?.serviceSections?.length ? (
+                <div className="space-y-3">
+                  {report.serviceSections.map((section, index) => (
+                    <div key={section.serviceId || index} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
+                      <p className="font-semibold">{section.serviceLabel}</p>
+                      <p className={`mt-1 text-sm ${textMuted}`}>{section.serviceSummary}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </Panel>
+
           <details className={`${card} p-5`}>
             <summary className="cursor-pointer font-semibold">Debug</summary>
             <pre className="mt-4 max-h-80 overflow-auto whitespace-pre-wrap rounded-2xl bg-slate-950 p-4 text-xs text-slate-100 dark:bg-black">{JSON.stringify(currentResult || currentState || {}, null, 2)}</pre>
@@ -704,18 +922,37 @@ export default function OutreachPage() {
                 <pre className="mt-4 whitespace-pre-wrap font-sans text-sm leading-7 text-slate-800 dark:text-slate-100">{finalBody || "Your final email preview will appear here."}</pre>
               </div>
 
+              <div className={soft + " p-4"}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Attachment</p>
+                    <p className="mt-2 text-sm font-semibold text-slate-900 dark:text-slate-100">{includeReport && reportReady ? attachmentFocusText : "Email will send without a report attachment."}</p>
+                    <p className={`mt-1 text-sm ${textMuted}`}>{reportReady ? "You can still turn the attachment off for this send." : "Generate and approve a report first if you want to attach one."}</p>
+                  </div>
+                  <label className="inline-flex items-center gap-2 text-sm font-medium">
+                    <input type="checkbox" className="h-4 w-4" checked={includeReport && reportReady} disabled={!reportReady} onChange={(event) => setIncludeReport(event.target.checked)} />
+                    Attach report
+                  </label>
+                </div>
+              </div>
+
               <div className="grid gap-2 sm:grid-cols-2">
                 <Button variant="secondary" disabled={savingDraft} onClick={saveDraft}><Clipboard size={16} /> {savingDraft ? "Saving..." : "Save Draft"}</Button>
                 <Button variant="secondary" disabled={!draft.subject && !draft.body} onClick={() => copyText(fullEmail, "Email copied")}><Clipboard size={16} /> Copy Email</Button>
                 <Button variant="secondary" disabled={!selectedLead || Boolean(runningLeadId)} onClick={() => runPipeline()}><RefreshCw size={16} /> Regenerate</Button>
-                <Button disabled={sending || !draft.subject || !draft.body} onClick={sendEmail}><Send size={16} /> {currentState.status === "APPROVED" ? "Send" : "Send Anyway"}</Button>
+                <Button disabled={sending || !draft.subject || !draft.body || emailServiceMismatch} onClick={sendEmail}><Send size={16} /> {currentState.status === "APPROVED" ? "Send" : "Send Anyway"}</Button>
               </div>
+              {emailServiceMismatch ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+                  Email does not match the selected report services. Regenerate email before sending.
+                </div>
+              ) : null}
 
               <div className={soft + " p-3"}>
                 <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Send test email</p>
                 <div className="flex flex-col gap-2 sm:flex-row">
                   <Input value={testEmail} onChange={(event) => setTestEmail(event.target.value)} placeholder="your@email.com" />
-                  <Button variant="secondary" disabled={sendingTest || !draft.subject || !draft.body} onClick={sendTestEmail}>{sendingTest ? "Sending..." : "Send Test"}</Button>
+                  <Button variant="secondary" disabled={sendingTest || !draft.subject || !draft.body || emailServiceMismatch} onClick={sendTestEmail}>{sendingTest ? "Sending..." : "Send Test"}</Button>
                 </div>
               </div>
             </div>

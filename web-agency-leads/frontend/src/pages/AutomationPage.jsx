@@ -1,4 +1,4 @@
-import { Activity, Bell, CalendarClock, CheckCircle2, Pause, Play, Plus, Save, SquareCheckBig, Trash2 } from "lucide-react";
+import { Activity, Bell, CalendarClock, CheckCircle2, Loader2, Mail, Pause, Play, Plus, RefreshCw, Save, Settings2, ShieldCheck, SquareCheckBig, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Badge } from "../components/ui/Badge.jsx";
 import { Button } from "../components/ui/Button.jsx";
@@ -44,19 +44,33 @@ export default function AutomationPage() {
   const [templates, setTemplates] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [dashboard, setDashboard] = useState({});
+  const [automationSettings, setAutomationSettings] = useState(null);
   const [performance, setPerformance] = useState([]);
   const [diagnostics, setDiagnostics] = useState({});
+  const [jobs, setJobs] = useState([]);
+  const [inbox, setInbox] = useState({ needsAction: [], followUpReminders: { items: [] } });
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [runningNow, setRunningNow] = useState(false);
+  const [syncingReplies, setSyncingReplies] = useState(false);
+  const [togglingPause, setTogglingPause] = useState(false);
+  const [processingLeads, setProcessingLeads] = useState(false);
+  const [sendingApproved, setSendingApproved] = useState(false);
+  const [processingFollowUps, setProcessingFollowUps] = useState(false);
+  const [runningScannerImport, setRunningScannerImport] = useState(false);
 
   async function loadAutomation() {
-    const [schedulesRes, templatesRes, notificationsRes, dashboardRes, performanceRes, diagnosticsRes] = await Promise.all([
+    const [schedulesRes, templatesRes, notificationsRes, dashboardRes, settingsRes, jobsRes, inboxRes, performanceRes, diagnosticsRes] = await Promise.all([
       api.get("/automation/schedules"),
       api.get("/scanner/templates"),
       api.get("/automation/notifications"),
       api.get("/automation/dashboard"),
+      api.get("/automation/settings"),
+      api.get("/automation/jobs"),
+      api.get("/automation/inbox"),
       api.get("/automation/performance"),
       api.get("/automation/diagnostics")
     ]);
@@ -64,6 +78,9 @@ export default function AutomationPage() {
     setTemplates(templatesRes.data);
     setNotifications(notificationsRes.data);
     setDashboard(dashboardRes.data);
+    setAutomationSettings(settingsRes.data);
+    setJobs(jobsRes.data);
+    setInbox(inboxRes.data);
     setPerformance(performanceRes.data);
     setDiagnostics(diagnosticsRes.data);
   }
@@ -161,24 +178,219 @@ export default function AutomationPage() {
     loadAutomation();
   }
 
+  async function saveAutomationSettings(event) {
+    event.preventDefault();
+    if (!automationSettings) return;
+    setSavingSettings(true);
+    try {
+      await api.patch("/automation/settings", {
+        ...automationSettings,
+        dailySendLimit: Number(automationSettings.dailySendLimit || 30),
+        hourlySendLimit: Number(automationSettings.hourlySendLimit || 10),
+        dailyFollowUpLimit: Number(automationSettings.dailyFollowUpLimit || 30),
+        hourlyFollowUpLimit: Number(automationSettings.hourlyFollowUpLimit || 10),
+        batchSize: Number(automationSettings.batchSize || 10),
+        minimumLeadQualityScore: Number(automationSettings.minimumLeadQualityScore || 8),
+        minimumReportQualityScore: Number(automationSettings.minimumReportQualityScore || 8),
+        minimumEmailQualityScore: Number(automationSettings.minimumEmailQualityScore || 8),
+        allowedIndustries: String(automationSettings.allowedIndustries || "")
+          .split(/,|\n/g)
+          .map((item) => item.trim())
+          .filter(Boolean),
+        blockedIndustries: String(automationSettings.blockedIndustries || "")
+          .split(/,|\n/g)
+          .map((item) => item.trim())
+          .filter(Boolean)
+      });
+      push("Automation settings saved");
+      await loadAutomation();
+    } catch (error) {
+      push(error.response?.data?.message || "Could not save automation settings", "error");
+    } finally {
+      setSavingSettings(false);
+    }
+  }
+
+  async function runAutomationNow() {
+    setRunningNow(true);
+    try {
+      const response = await api.post("/automation/run-now");
+      push(`Automation queued: ${response.data.queued || 0} schedule(s) started${response.data.failed ? `, ${response.data.failed} failed` : ""}.`);
+      await loadAutomation();
+    } catch (error) {
+      push(error.response?.data?.message || "Could not run automation now", "error");
+    } finally {
+      setRunningNow(false);
+    }
+  }
+
+  async function syncReplies() {
+    setSyncingReplies(true);
+    try {
+      const response = await api.post("/gmail/sync-replies");
+      push(`Reply sync complete: ${response.data.repliesFound || 0} replies found, ${response.data.leadsUpdated || 0} leads updated.`);
+      await loadAutomation();
+    } catch (error) {
+      push(error.response?.data?.message || "Reply sync failed", "error");
+    } finally {
+      setSyncingReplies(false);
+    }
+  }
+
+  async function toggleGlobalPause() {
+    setTogglingPause(true);
+    try {
+      if (automationSettings?.automationPaused) {
+        await api.post("/automation/resume");
+        push("Automation resumed");
+      } else {
+        const reason = window.prompt("Pause reason (optional):", automationSettings?.automationPausedReason || "");
+        await api.post("/automation/pause", reason ? { reason } : {});
+        push("Automation paused");
+      }
+      await loadAutomation();
+    } catch (error) {
+      push(error.response?.data?.message || "Could not update automation pause state", "error");
+    } finally {
+      setTogglingPause(false);
+    }
+  }
+
+  async function processLeadsNow() {
+    setProcessingLeads(true);
+    try {
+      const response = await api.post("/automation/process-leads", {});
+      push(`Lead automation complete: ${response.data.sent || 0} sent, ${response.data.processed || 0} processed, ${response.data.failed || 0} failed.`);
+      await loadAutomation();
+    } catch (error) {
+      push(error.response?.data?.message || "Could not process leads", "error");
+    } finally {
+      setProcessingLeads(false);
+    }
+  }
+
+  async function sendApprovedNow() {
+    setSendingApproved(true);
+    try {
+      const response = await api.post("/automation/send-approved", {});
+      push(`Approved send complete: ${response.data.sent || 0} sent, ${response.data.skipped || 0} skipped.`);
+      await loadAutomation();
+    } catch (error) {
+      push(error.response?.data?.message || "Could not send approved emails", "error");
+    } finally {
+      setSendingApproved(false);
+    }
+  }
+
+  async function processFollowUpsNow() {
+    setProcessingFollowUps(true);
+    try {
+      const response = await api.post("/automation/process-follow-ups", {});
+      const sent = response.data.sent ?? response.data.generated ?? 0;
+      push(`Follow-up automation complete: ${sent} items handled.`);
+      await loadAutomation();
+    } catch (error) {
+      push(error.response?.data?.message || "Could not process follow-ups", "error");
+    } finally {
+      setProcessingFollowUps(false);
+    }
+  }
+
+  async function runScannerImportNow() {
+    setRunningScannerImport(true);
+    try {
+      const response = await api.post("/automation/scanner-import", {});
+      push(`Scanner import summary: ${response.data.imported || 0} imported, ${response.data.duplicates || 0} duplicates.`);
+      await loadAutomation();
+    } catch (error) {
+      push(error.response?.data?.message || "Could not check scanner import automation", "error");
+    } finally {
+      setRunningScannerImport(false);
+    }
+  }
+
+  function updateSetting(key, value) {
+    setAutomationSettings((current) => ({ ...(current || {}), [key]: value }));
+  }
+
+  const sendUsage = dashboard.sendUsage || automationSettings?.sendUsage || {};
+  const warnings = automationSettings?.warnings || dashboard.warnings || [];
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
           <p className="text-sm font-semibold uppercase tracking-[0.22em] text-slate-400">Automation</p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight md:text-4xl">Scheduled scans</h1>
-          <p className="mt-2 max-w-2xl text-slate-500">Run saved scanner templates automatically and let results flow into Scanner, Leads, CRM, and Outreach.</p>
+          <h1 className="mt-2 text-3xl font-semibold tracking-tight md:text-4xl">Outreach automation</h1>
+          <p className="mt-2 max-w-3xl text-slate-500">Control how scanner imports, qualification, report generation, email sending, reply sync, and follow-up prep run across the outreach pipeline.</p>
         </div>
-        <Button onClick={openCreate}><Plus size={16} /> New schedule</Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" onClick={runScannerImportNow} disabled={runningScannerImport}>
+            {runningScannerImport ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+            Scanner import
+          </Button>
+          <Button variant="secondary" onClick={processLeadsNow} disabled={processingLeads}>
+            {processingLeads ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
+            Process leads
+          </Button>
+          <Button variant="secondary" onClick={sendApprovedNow} disabled={sendingApproved}>
+            {sendingApproved ? <Loader2 size={16} className="animate-spin" /> : <Mail size={16} />}
+            Send approved
+          </Button>
+          <Button variant="secondary" onClick={processFollowUpsNow} disabled={processingFollowUps}>
+            {processingFollowUps ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+            Process follow-ups
+          </Button>
+          <Button variant="secondary" onClick={syncReplies} disabled={syncingReplies}>
+            {syncingReplies ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+            Sync replies
+          </Button>
+          <Button variant="secondary" onClick={toggleGlobalPause} disabled={togglingPause}>
+            {automationSettings?.automationPaused ? <Play size={16} /> : <Pause size={16} />}
+            {automationSettings?.automationPaused ? "Resume automation" : "Pause automation"}
+          </Button>
+          <Button onClick={runAutomationNow} disabled={runningNow}>
+            {runningNow ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
+            Run automation now
+          </Button>
+          <Button variant="secondary" onClick={openCreate}><Plus size={16} /> New schedule</Button>
+        </div>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      {automationSettings?.automationPaused && (
+        <div className="rounded-3xl border border-amber-200 bg-amber-50 p-5 text-amber-900">
+          <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide">
+            <Pause size={16} />
+            Automation paused
+          </div>
+          <p className="mt-2 text-sm">{automationSettings.automationPausedReason || "Email sending and follow-up sending are paused globally."}</p>
+        </div>
+      )}
+
+      {!!warnings.length && (
+        <div className="rounded-3xl border border-amber-200 bg-amber-50 p-5">
+          <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-amber-900">
+            <ShieldCheck size={16} />
+            Safety warnings
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {warnings.map((warning) => (
+              <Badge key={warning} className="bg-white text-amber-900 ring-amber-200">{warning}</Badge>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-8">
         {[
           ["Active schedules", dashboard.activeSchedules || 0],
           ["Runs today", dashboard.runsToday || 0],
           ["Success rate", `${dashboard.successRate || 0}%`],
           ["Avg runtime", `${dashboard.avgRuntime || 0} min`],
-          ["Leads today", dashboard.leadsGeneratedToday || 0]
+          ["Leads today", dashboard.leadsGeneratedToday || 0],
+          ["Needs action", dashboard.needsActionCount || 0],
+          ["Follow-ups due", dashboard.followUpsDueCount || 0],
+          ["Replies detected", dashboard.repliedCount || 0]
         ].map(([label, value]) => (
           <div key={label} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</p>
@@ -189,6 +401,203 @@ export default function AutomationPage() {
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
         <section className="space-y-4">
+          <section className="grid gap-4 xl:grid-cols-2">
+            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+              <h2 className="text-lg font-semibold">Follow-up reminders</h2>
+              <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                {[
+                  ["Due today", inbox.followUpReminders?.dueToday || 0],
+                  ["Due tomorrow", inbox.followUpReminders?.dueTomorrow || 0],
+                  ["Overdue", inbox.followUpReminders?.overdue || 0]
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-2xl bg-slate-50 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</p>
+                    <p className="mt-2 text-2xl font-semibold">{value}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 space-y-2">
+                {(inbox.followUpReminders?.items || []).slice(0, 6).map((item) => (
+                  <div key={item.id} className="rounded-2xl border border-slate-200 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="font-semibold">{item.company}</p>
+                      <Badge className="bg-slate-100 text-slate-700 ring-slate-200">{String(item.followUpStatus || "").toLowerCase().replaceAll("_", " ")}</Badge>
+                    </div>
+                    <p className="mt-1 text-sm text-slate-500">{formatDate(item.nextFollowUpAt)}</p>
+                  </div>
+                ))}
+                {!(inbox.followUpReminders?.items || []).length && <p className="text-sm text-slate-500">No follow-up reminders right now.</p>}
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+              <h2 className="text-lg font-semibold">Needs action inbox</h2>
+              <div className="mt-4 space-y-2">
+                {(inbox.needsAction || []).slice(0, 8).map((item) => (
+                  <div key={item.id} className="rounded-2xl border border-slate-200 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="font-semibold">{item.company}</p>
+                      <Badge className="bg-amber-100 text-amber-800 ring-amber-200">{String(item.needsActionReason || "needs_action").replaceAll("_", " ")}</Badge>
+                    </div>
+                    <p className="mt-1 text-sm text-slate-500">{item.lastReplySnippet || item.lastReplyFrom || formatDate(item.updatedAt)}</p>
+                  </div>
+                ))}
+                {!(inbox.needsAction || []).length && <p className="text-sm text-slate-500">No leads need action right now.</p>}
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-5 flex items-center gap-2">
+              <Settings2 size={18} />
+              <div>
+                <h2 className="text-lg font-semibold">Automation settings</h2>
+                <p className="text-sm text-slate-500">Phase 1 safety controls for mode, send limits, windows, and manual approval rules.</p>
+              </div>
+            </div>
+            {automationSettings && (
+              <form onSubmit={saveAutomationSettings} className="space-y-5">
+                <div className="grid gap-4 lg:grid-cols-3">
+                  <label>
+                    <span className="mb-1.5 block text-sm font-medium">Automation mode</span>
+                    <Select value={automationSettings.mode || "MANUAL_REVIEW"} onChange={(e) => updateSetting("mode", e.target.value)}>
+                      <option value="MANUAL_REVIEW">Manual Review Mode</option>
+                      <option value="SEMI_AUTOMATIC">Semi-Automatic Mode</option>
+                      <option value="FULL_AUTOMATION">Full Automation Mode</option>
+                    </Select>
+                  </label>
+                  <label>
+                    <span className="mb-1.5 block text-sm font-medium">Send timezone</span>
+                    <Input value={automationSettings.sendTimezone || "Asia/Singapore"} onChange={(e) => updateSetting("sendTimezone", e.target.value)} />
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <label>
+                      <span className="mb-1.5 block text-sm font-medium">Start</span>
+                      <Input type="time" value={automationSettings.sendWindowStart || "09:00"} onChange={(e) => updateSetting("sendWindowStart", e.target.value)} />
+                    </label>
+                    <label>
+                      <span className="mb-1.5 block text-sm font-medium">End</span>
+                      <Input type="time" value={automationSettings.sendWindowEnd || "18:00"} onChange={(e) => updateSetting("sendWindowEnd", e.target.value)} />
+                    </label>
+                  </div>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  {[
+                    ["scannerAutoImportEnabled", "Auto import scanner leads"],
+                    ["autoAnalyzeLeadsEnabled", "Auto qualify leads"],
+                    ["autoAnalyzeServicesEnabled", "Auto analyze services"],
+                    ["autoRunPipelineEnabled", "Auto run outreach pipeline"],
+                    ["autoGenerateReportsEnabled", "Auto generate reports"],
+                    ["autoApproveReportsEnabled", "Auto approve reports"],
+                    ["autoGenerateEmailsEnabled", "Auto generate emails"],
+                    ["autoSendInitialEmailsEnabled", "Auto send initial emails"],
+                    ["autoSyncRepliesEnabled", "Auto sync replies"],
+                    ["autoGenerateFollowUpsEnabled", "Auto generate follow-ups"],
+                    ["autoSendFollowUpsEnabled", "Auto send follow-ups"],
+                    ["requireManualApprovalBeforeInitialSend", "Manual approval before initial send"],
+                    ["requireManualApprovalBeforeFollowUpSend", "Manual approval before follow-up send"],
+                    ["skipIfReportMissing", "Skip when report missing"],
+                    ["skipIfRecipientMissing", "Skip when recipient missing"],
+                    ["skipIfDuplicateDomain", "Skip duplicate domains"],
+                    ["skipIfDuplicateEmail", "Skip duplicate emails"],
+                    ["skipIfDoNotContact", "Skip do-not-contact"],
+                    ["skipIfBounced", "Skip bounced leads"]
+                  ].map(([key, label]) => (
+                    <label key={key} className="flex items-center gap-3 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(automationSettings[key])}
+                        onChange={(e) => updateSetting(key, e.target.checked)}
+                        className="h-4 w-4 rounded border-slate-300"
+                      />
+                      <span>{label}</span>
+                    </label>
+                  ))}
+                </div>
+
+                <div className="grid gap-4 lg:grid-cols-3">
+                  <label>
+                    <span className="mb-1.5 block text-sm font-medium">Daily initial email limit</span>
+                    <Input type="number" min="1" value={automationSettings.dailySendLimit || 30} onChange={(e) => updateSetting("dailySendLimit", e.target.value)} />
+                  </label>
+                  <label>
+                    <span className="mb-1.5 block text-sm font-medium">Hourly initial email limit</span>
+                    <Input type="number" min="1" value={automationSettings.hourlySendLimit || 10} onChange={(e) => updateSetting("hourlySendLimit", e.target.value)} />
+                  </label>
+                  <label>
+                    <span className="mb-1.5 block text-sm font-medium">Batch size</span>
+                    <Input type="number" min="1" value={automationSettings.batchSize || 10} onChange={(e) => updateSetting("batchSize", e.target.value)} />
+                  </label>
+                  <label>
+                    <span className="mb-1.5 block text-sm font-medium">Daily follow-up limit</span>
+                    <Input type="number" min="1" value={automationSettings.dailyFollowUpLimit || 30} onChange={(e) => updateSetting("dailyFollowUpLimit", e.target.value)} />
+                  </label>
+                  <label>
+                    <span className="mb-1.5 block text-sm font-medium">Hourly follow-up limit</span>
+                    <Input type="number" min="1" value={automationSettings.hourlyFollowUpLimit || 10} onChange={(e) => updateSetting("hourlyFollowUpLimit", e.target.value)} />
+                  </label>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                    <p className="font-semibold text-slate-900">Send usage</p>
+                    <p className="mt-2">Initial: {(sendUsage.initial?.today || 0)} today, {(sendUsage.initial?.thisHour || 0)} this hour</p>
+                    <p className="mt-1">Follow-up: {(sendUsage.followUp?.today || 0)} today, {(sendUsage.followUp?.thisHour || 0)} this hour</p>
+                  </div>
+                </div>
+
+                <div className="grid gap-4 lg:grid-cols-3">
+                  <label>
+                    <span className="mb-1.5 block text-sm font-medium">Minimum lead quality</span>
+                    <Input type="number" min="0" max="10" value={automationSettings.minimumLeadQualityScore || 8} onChange={(e) => updateSetting("minimumLeadQualityScore", e.target.value)} />
+                  </label>
+                  <label>
+                    <span className="mb-1.5 block text-sm font-medium">Minimum report quality</span>
+                    <Input type="number" min="0" max="10" value={automationSettings.minimumReportQualityScore || 8} onChange={(e) => updateSetting("minimumReportQualityScore", e.target.value)} />
+                  </label>
+                  <label>
+                    <span className="mb-1.5 block text-sm font-medium">Minimum email quality</span>
+                    <Input type="number" min="0" max="10" value={automationSettings.minimumEmailQualityScore || 8} onChange={(e) => updateSetting("minimumEmailQualityScore", e.target.value)} />
+                  </label>
+                </div>
+
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <label>
+                    <span className="mb-1.5 block text-sm font-medium">Allowed industries</span>
+                    <textarea
+                      rows={4}
+                      className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm shadow-sm outline-none ring-0 placeholder:text-slate-400 focus:border-slate-950"
+                      value={Array.isArray(automationSettings.allowedIndustries) ? automationSettings.allowedIndustries.join(", ") : automationSettings.allowedIndustries || ""}
+                      onChange={(e) => updateSetting("allowedIndustries", e.target.value)}
+                      placeholder="Leave blank to allow all"
+                    />
+                  </label>
+                  <label>
+                    <span className="mb-1.5 block text-sm font-medium">Blocked industries</span>
+                    <textarea
+                      rows={4}
+                      className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm shadow-sm outline-none ring-0 placeholder:text-slate-400 focus:border-slate-950"
+                      value={Array.isArray(automationSettings.blockedIndustries) ? automationSettings.blockedIndustries.join(", ") : automationSettings.blockedIndustries || ""}
+                      onChange={(e) => updateSetting("blockedIndustries", e.target.value)}
+                      placeholder="Comma-separated industry names"
+                    />
+                  </label>
+                </div>
+
+                {automationSettings.mode === "FULL_AUTOMATION" && (
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                    Full automation will send emails without manual review if leads pass safety gates. Make sure Gmail, send limits, do-not-contact rules, and quality thresholds are configured first.
+                  </div>
+                )}
+
+                <div className="flex justify-end">
+                  <Button disabled={savingSettings}>
+                    {savingSettings ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                    Save automation settings
+                  </Button>
+                </div>
+              </form>
+            )}
+          </section>
+
           {schedules.map((schedule) => (
             <article key={schedule.id} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
@@ -315,6 +724,57 @@ export default function AutomationPage() {
         </section>
 
         <aside className="space-y-6">
+          <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="mb-4 text-lg font-semibold">Recent automation jobs</h2>
+            <div className="space-y-3">
+              {jobs.map((job) => (
+                <div key={job.id} className="rounded-2xl border border-slate-200 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-semibold">{job.scheduleName || job.type.replaceAll("_", " ")}</p>
+                      <p className="text-xs uppercase tracking-wide text-slate-400">{job.stage || job.status}</p>
+                    </div>
+                    <Badge className={job.status === "completed" ? "bg-emerald-50 text-emerald-700 ring-emerald-200" : "bg-slate-100 text-slate-700 ring-slate-200"}>
+                      {job.status}
+                    </Badge>
+                  </div>
+                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
+                    <div className="h-full rounded-full bg-slate-950 transition-all" style={{ width: `${job.progressPercent || 0}%` }} />
+                  </div>
+                  <p className="mt-2 text-xs text-slate-500">{job.completed} / {job.total} complete · {job.failed} failed</p>
+                </div>
+              ))}
+              {!jobs.length && <p className="text-sm text-slate-500">No automation jobs yet.</p>}
+            </div>
+          </section>
+
+          <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="mb-4 text-lg font-semibold">Safety + limits</h2>
+            <div className="grid gap-2">
+              {[
+                ["Mode", dashboard.automationMode || automationSettings?.mode || "MANUAL_REVIEW"],
+                ["Pause state", automationSettings?.automationPaused ? "Paused" : "Running"],
+                ["Reports generated", dashboard.reportsGenerated || 0],
+                ["Reports approved", dashboard.reportsApproved || 0],
+                ["Emails generated", dashboard.emailsGenerated || 0],
+                ["Emails sent", dashboard.emailsSent || 0],
+                ["Interested replies", dashboard.interestedReplies || 0],
+                ["Follow-ups sent", dashboard.followUpsSent || 0],
+                ["Initial sends left today", sendUsage.initial?.remainingToday ?? 0],
+                ["Initial sends left this hour", sendUsage.initial?.remainingThisHour ?? 0],
+                ["Follow-ups left today", sendUsage.followUp?.remainingToday ?? 0],
+                ["Follow-ups left this hour", sendUsage.followUp?.remainingThisHour ?? 0],
+                ["Bounced leads", dashboard.bouncedCount || 0],
+                ["Do not contact", dashboard.doNotContactCount || 0]
+              ].map(([label, value]) => (
+                <div key={label} className="flex items-center justify-between rounded-2xl bg-slate-50 px-4 py-3 text-sm">
+                  <span>{label}</span>
+                  <Badge className="bg-slate-100 text-slate-700 ring-slate-200">{value}</Badge>
+                </div>
+              ))}
+            </div>
+          </section>
+
           <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="mb-4 text-lg font-semibold">Failure diagnostics</h2>
             <div className="grid gap-2">

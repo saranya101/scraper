@@ -1,4 +1,4 @@
-import { Archive, Bell, CheckSquare, Clock3, Filter, GripVertical, KanbanSquare, List, Save, Trash2, UserRound } from "lucide-react";
+import { Archive, ArrowUpRight, Bell, CheckSquare, Clock3, Filter, GripVertical, KanbanSquare, List, RefreshCw, Save, Trash2, UserRound } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge } from "../components/ui/Badge.jsx";
@@ -8,7 +8,7 @@ import { useToast } from "../hooks/useToast.jsx";
 import { api } from "../services/api.js";
 import { domain, formatDate, pipelineStageOrder, pipelineStages, priorities } from "../utils/format.js";
 
-const baseFilters = { assignedToUserId: "", industryId: "", recommendedServiceId: "", priority: "", reminders: "" };
+const baseFilters = { assignedToUserId: "", industryId: "", recommendedServiceId: "", priority: "", reminders: "", emailStatus: "", replyType: "", actionState: "" };
 
 function reminderState(date) {
   if (!date) return null;
@@ -22,6 +22,29 @@ function readSavedViews() {
   } catch {
     return [];
   }
+}
+
+function gmailReplyUrl(threadId = "", messageId = "") {
+  if (threadId && messageId) return `https://mail.google.com/mail/u/0/#all/${threadId}/${messageId}`;
+  if (threadId) return `https://mail.google.com/mail/u/0/#all/${threadId}`;
+  return "";
+}
+
+function replyBadge(lead) {
+  const type = String(lead?.replyClassification || "");
+  if (!type) return null;
+  const map = {
+    INTERESTED: ["Interested", "bg-emerald-50 text-emerald-700 ring-emerald-200"],
+    MAYBE_LATER: ["Maybe later", "bg-amber-50 text-amber-700 ring-amber-200"],
+    NOT_INTERESTED: ["Not interested", "bg-slate-100 text-slate-700 ring-slate-200"],
+    ASKED_FOR_PRICE: ["Asked for price", "bg-cyan-50 text-cyan-700 ring-cyan-200"],
+    ASKED_FOR_MORE_INFO: ["Asked for more info", "bg-blue-50 text-blue-700 ring-blue-200"],
+    WRONG_CONTACT: ["Wrong contact", "bg-orange-50 text-orange-700 ring-orange-200"],
+    AUTO_REPLY: ["Auto-reply", "bg-violet-50 text-violet-700 ring-violet-200"],
+    OTHER: ["Other reply", "bg-slate-100 text-slate-700 ring-slate-200"]
+  };
+  const [label, className] = map[type] || [type.toLowerCase().replaceAll("_", " "), "bg-slate-100 text-slate-700 ring-slate-200"];
+  return { label, className };
 }
 
 export default function CrmPage() {
@@ -45,6 +68,8 @@ export default function CrmPage() {
   const [draggingId, setDraggingId] = useState("");
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState("kanban");
+  const [syncingReplies, setSyncingReplies] = useState(false);
+  const [replySyncProgress, setReplySyncProgress] = useState(null);
 
   const params = useMemo(() => Object.fromEntries(Object.entries(filters).filter(([, value]) => value)), [filters]);
 
@@ -61,6 +86,33 @@ export default function CrmPage() {
       push(error.response?.data?.message || "Could not load CRM", "error");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function syncReplies() {
+    setSyncingReplies(true);
+    setReplySyncProgress({ percent: 8, label: "Preparing Gmail reply sync..." });
+    const progressTimer = setInterval(() => {
+      setReplySyncProgress((current) => current ? {
+        ...current,
+        percent: Math.min(current.percent >= 75 ? current.percent + 3 : current.percent + 8, 92),
+        label: current.percent < 35 ? "Checking sent outreach..." : current.percent < 70 ? "Scanning recent Gmail messages..." : "Matching replies to leads..."
+      } : current);
+    }, 450);
+    try {
+      const { data } = await api.post("/gmail/sync-replies");
+      clearInterval(progressTimer);
+      setReplySyncProgress({ percent: 100, label: `Sync complete: ${data.leadsUpdated} leads updated.` });
+      push(`Reply sync complete: ${data.repliesFound} replies found, ${data.leadsUpdated} leads updated.`);
+      await loadCrm();
+      setTimeout(() => setReplySyncProgress(null), 1800);
+    } catch (error) {
+      clearInterval(progressTimer);
+      setReplySyncProgress({ percent: 100, label: error.response?.data?.message || "Reply sync failed." });
+      push(error.response?.data?.message || "Reply sync failed. Check Gmail connection and backend logs.", "error");
+      setTimeout(() => setReplySyncProgress(null), 2400);
+    } finally {
+      setSyncingReplies(false);
     }
   }
 
@@ -153,6 +205,34 @@ export default function CrmPage() {
     await loadCrm();
   }
 
+  async function bulkClassifyReplies() {
+    if (!selected.length) return push("Select leads first", "error");
+    let updated = 0;
+    for (const leadId of selected) {
+      try {
+        await api.post(`/leads/${leadId}/classify-reply`);
+        updated += 1;
+      } catch {}
+    }
+    push(`Classified replies for ${updated} leads`);
+    await loadCrm();
+  }
+
+  async function bulkDoNotContact() {
+    if (!selected.length) return push("Select leads first", "error");
+    const reason = prompt("Reason for do-not-contact?", "manual_bulk_do_not_contact");
+    if (reason == null) return;
+    let updated = 0;
+    for (const leadId of selected) {
+      try {
+        await api.post(`/leads/${leadId}/do-not-contact`, { reason });
+        updated += 1;
+      } catch {}
+    }
+    push(`Marked ${updated} leads do not contact`);
+    await loadCrm();
+  }
+
   function saveView() {
     const name = viewName.trim();
     if (!name) return;
@@ -179,6 +259,7 @@ export default function CrmPage() {
           <p className="mt-2 max-w-2xl text-slate-500">Move leads from first draft to won work, assign owners, and keep follow-ups visible.</p>
         </div>
         <div className="flex items-center gap-3">
+          <Button variant="secondary" onClick={syncReplies} disabled={syncingReplies}><RefreshCw size={16} /> {syncingReplies ? "Syncing replies..." : "Sync Replies"}</Button>
           <div className="flex rounded-lg bg-slate-100 p-1">
             <button onClick={() => setView("kanban")} className={`rounded-md p-2 ${view === "kanban" ? "bg-white shadow-sm" : "text-slate-500"}`} aria-label="Kanban view"><KanbanSquare size={16} /></button>
             <button onClick={() => setView("table")} className={`rounded-md p-2 ${view === "table" ? "bg-white shadow-sm" : "text-slate-500"}`} aria-label="Table view"><List size={16} /></button>
@@ -192,7 +273,7 @@ export default function CrmPage() {
 
       <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-600"><Filter size={16} /> Pipeline filters</div>
-        <div className="grid gap-3 md:grid-cols-5">
+        <div className="grid gap-3 md:grid-cols-6">
           <Select value={filters.assignedToUserId} onChange={(e) => setFilters({ ...filters, assignedToUserId: e.target.value })}>
             <option value="">All owners</option>
             <option value="unassigned">Unassigned</option>
@@ -217,6 +298,32 @@ export default function CrmPage() {
             <option value="due">Due reminders</option>
             <option value="upcoming">Upcoming reminders</option>
           </Select>
+          <Select value={filters.emailStatus} onChange={(e) => setFilters({ ...filters, emailStatus: e.target.value })}>
+            <option value="">All email states</option>
+            <option value="NOT_SENT">Email Not Sent</option>
+            <option value="READY_TO_SEND">Approved</option>
+            <option value="SENT">Sent</option>
+            <option value="REPLIED">Replied</option>
+            <option value="BOUNCED">Bounced</option>
+            <option value="REJECTED">Failed / rejected</option>
+          </Select>
+          <Select value={filters.replyType} onChange={(e) => setFilters({ ...filters, replyType: e.target.value })}>
+            <option value="">All reply types</option>
+            <option value="INTERESTED">Interested</option>
+            <option value="MAYBE_LATER">Maybe later</option>
+            <option value="NOT_INTERESTED">Not interested</option>
+            <option value="ASKED_FOR_PRICE">Asked for price</option>
+            <option value="ASKED_FOR_MORE_INFO">Asked for more info</option>
+            <option value="WRONG_CONTACT">Wrong contact</option>
+            <option value="AUTO_REPLY">Auto-reply</option>
+            <option value="OTHER">Other</option>
+          </Select>
+          <Select value={filters.actionState} onChange={(e) => setFilters({ ...filters, actionState: e.target.value })}>
+            <option value="">All actions</option>
+            <option value="needs_action">Needs action</option>
+            <option value="no_action">No action needed</option>
+            <option value="do_not_contact">Do not contact</option>
+          </Select>
         </div>
         <div className="mt-3 grid gap-3 md:grid-cols-[1fr_auto_auto_auto]">
           <Input value={viewName} onChange={(e) => setViewName(e.target.value)} placeholder="Saved view name" />
@@ -230,9 +337,21 @@ export default function CrmPage() {
         </div>
       </div>
 
+      {replySyncProgress ? (
+        <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-medium text-slate-700">{replySyncProgress.label}</p>
+            <span className="text-xs font-semibold text-slate-500">{replySyncProgress.percent}%</span>
+          </div>
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
+            <div className="h-full bg-slate-950 transition-all duration-300" style={{ width: `${replySyncProgress.percent}%` }} />
+          </div>
+        </div>
+      ) : null}
+
       {selected.length > 0 && (
         <div className="sticky top-20 z-10 rounded-2xl border border-slate-200 bg-white p-3 shadow-soft">
-          <div className="grid gap-3 md:grid-cols-[auto_1fr_1fr_1fr_auto_auto_auto] md:items-center">
+          <div className="grid gap-3 md:grid-cols-[auto_1fr_1fr_1fr_auto_auto_auto_auto_auto] md:items-center">
             <p className="flex items-center gap-2 text-sm font-semibold"><CheckSquare size={16} /> {selected.length} selected</p>
             <Select value={bulkStage} onChange={(e) => setBulkStage(e.target.value)}>
               <option value="">Keep stage</option>
@@ -245,6 +364,8 @@ export default function CrmPage() {
             </Select>
             <Input type="datetime-local" value={bulkReminder} onChange={(e) => setBulkReminder(e.target.value)} />
             <Button onClick={applyBulkUpdate}>Apply bulk update</Button>
+            <Button variant="secondary" onClick={bulkClassifyReplies}>Classify replies</Button>
+            <Button variant="secondary" onClick={bulkDoNotContact}>Mark DNC</Button>
             <Button variant="secondary" onClick={bulkArchive}><Archive size={16} /> Archive</Button>
             <Button variant="danger" onClick={bulkDelete}><Trash2 size={16} /> Delete</Button>
           </div>
@@ -260,6 +381,7 @@ export default function CrmPage() {
                   <th className="px-4 py-3"></th>
                   <th className="px-4 py-3">Lead</th>
                   <th className="px-4 py-3">Stage</th>
+                  <th className="px-4 py-3">Email</th>
                   <th className="px-4 py-3">Industry</th>
                   <th className="px-4 py-3">Service</th>
                   <th className="px-4 py-3">Value</th>
@@ -269,6 +391,9 @@ export default function CrmPage() {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {allLeads.map((lead) => (
+                  (() => {
+                    const classification = replyBadge(lead);
+                    return (
                   <tr key={lead.id} className="hover:bg-slate-50/80">
                     <td className="px-4 py-3"><input type="checkbox" checked={selected.includes(lead.id)} onChange={() => toggleLead(lead.id)} /></td>
                     <td className="px-4 py-3">
@@ -276,12 +401,28 @@ export default function CrmPage() {
                       <a href={lead.website} target="_blank" rel="noreferrer" className="mt-1 block text-xs text-slate-500">{domain(lead.website)}</a>
                     </td>
                     <td className="px-4 py-3"><Badge className={pipelineStages[lead.pipelineStage]?.className}>{pipelineStages[lead.pipelineStage]?.label}</Badge></td>
+                    <td className="px-4 py-3">
+                      <Badge className={lead.emailStatus === "REPLIED" || lead.repliedAt ? "bg-emerald-50 text-emerald-700 ring-emerald-200" : lead.emailStatus === "BOUNCED" || lead.bouncedAt ? "bg-rose-50 text-rose-700 ring-rose-200" : lead.emailStatus === "SENT" || lead.lastEmailSentAt ? "bg-indigo-50 text-indigo-700 ring-indigo-200" : lead.emailStatus === "READY_TO_SEND" ? "bg-violet-50 text-violet-700 ring-violet-200" : lead.emailStatus === "REJECTED" ? "bg-rose-50 text-rose-700 ring-rose-200" : "bg-slate-100 text-slate-700 ring-slate-200"}>
+                        {lead.emailStatus === "READY_TO_SEND" ? "Approved" : lead.emailStatus || (lead.repliedAt ? "REPLIED" : lead.lastEmailSentAt ? "SENT" : "NOT_SENT")}
+                      </Badge>
+                      {classification ? <Badge className={`mt-2 ${classification.className}`}>{classification.label}</Badge> : null}
+                      {lead.needsAction ? <Badge className="mt-2 bg-amber-50 text-amber-700 ring-amber-200">Needs action</Badge> : null}
+                      {lead.doNotContact ? <Badge className="mt-2 bg-zinc-100 text-zinc-700 ring-zinc-200">Do not contact</Badge> : null}
+                      {lead.lastReplySnippet ? <p className="mt-2 max-w-xs line-clamp-2 text-xs text-slate-500">{lead.lastReplySnippet}</p> : null}
+                      {lead.lastReplySnippet && (lead.gmailThreadId || lead.lastReplyMessageId) ? (
+                        <a href={gmailReplyUrl(lead.gmailThreadId, lead.lastReplyMessageId)} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 hover:text-emerald-900">
+                          <ArrowUpRight size={13} /> Open replied email
+                        </a>
+                      ) : null}
+                    </td>
                     <td className="px-4 py-3 text-slate-600">{lead.industryRef?.name || lead.industry || "-"}</td>
                     <td className="px-4 py-3 text-slate-600">{lead.serviceOpportunities?.[0]?.service?.name || "-"}</td>
                     <td className="px-4 py-3 text-slate-600">{lead.serviceOpportunities?.[0] ? `$${lead.serviceOpportunities[0].estimatedMinValue.toLocaleString()} - $${lead.serviceOpportunities[0].estimatedMaxValue.toLocaleString()}` : lead.estimatedProjectValue || "-"}</td>
                     <td className="px-4 py-3 text-slate-600">{lead.assignedTo?.name || "Unassigned"}</td>
                     <td className="px-4 py-3 font-semibold">{lead.score}/10</td>
                   </tr>
+                    );
+                  })()
                 ))}
               </tbody>
             </table>
@@ -312,6 +453,9 @@ export default function CrmPage() {
                   </div>
                   <div className="space-y-4">
                     {column.leads.map((lead) => (
+                      (() => {
+                        const classification = replyBadge(lead);
+                        return (
                       <article
                         key={lead.id}
                         draggable
@@ -333,8 +477,20 @@ export default function CrmPage() {
                         <div className="mb-3 flex flex-wrap gap-2">
                           <Badge className={priorities[lead.priority]?.className}>{priorities[lead.priority]?.label}</Badge>
                           {lead.reminderDate && <Badge className={new Date(lead.reminderDate) <= new Date() ? "bg-rose-50 text-rose-700 ring-rose-200" : "bg-amber-50 text-amber-700 ring-amber-200"}><Bell size={12} /> {reminderState(lead.reminderDate)}</Badge>}
+                          <Badge className={lead.emailStatus === "REPLIED" || lead.repliedAt ? "bg-emerald-50 text-emerald-700 ring-emerald-200" : lead.emailStatus === "BOUNCED" || lead.bouncedAt ? "bg-rose-50 text-rose-700 ring-rose-200" : lead.emailStatus === "SENT" || lead.lastEmailSentAt ? "bg-indigo-50 text-indigo-700 ring-indigo-200" : lead.emailStatus === "READY_TO_SEND" ? "bg-violet-50 text-violet-700 ring-violet-200" : lead.emailStatus === "REJECTED" ? "bg-rose-50 text-rose-700 ring-rose-200" : "bg-slate-100 text-slate-700 ring-slate-200"}>
+                            {lead.emailStatus === "READY_TO_SEND" ? "Approved" : lead.emailStatus || (lead.repliedAt ? "REPLIED" : lead.lastEmailSentAt ? "SENT" : "NOT_SENT")}
+                          </Badge>
+                          {classification ? <Badge className={classification.className}>{classification.label}</Badge> : null}
+                          {lead.needsAction ? <Badge className="bg-amber-50 text-amber-700 ring-amber-200">Needs action</Badge> : null}
+                          {lead.doNotContact ? <Badge className="bg-zinc-100 text-zinc-700 ring-zinc-200">Do not contact</Badge> : null}
                         </div>
                         <p className="mb-3 text-sm text-slate-500">{lead.industryRef?.name || lead.industry || "No industry"} · {lead.serviceOpportunities?.[0]?.service?.name || "No service"}</p>
+                        {lead.lastReplySnippet ? <p className="mb-3 line-clamp-3 rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-900">{lead.lastReplySnippet}</p> : null}
+                        {lead.lastReplySnippet && (lead.gmailThreadId || lead.lastReplyMessageId) ? (
+                          <a href={gmailReplyUrl(lead.gmailThreadId, lead.lastReplyMessageId)} target="_blank" rel="noreferrer" className="mb-3 inline-flex items-center gap-2 text-xs font-semibold text-emerald-700 hover:text-emerald-900">
+                            <ArrowUpRight size={13} /> Open replied email
+                          </a>
+                        ) : null}
                         <div className="space-y-2">
                           <Select value={lead.assignedToUserId || ""} onChange={(e) => assignLead(lead.id, e.target.value)}>
                             <option value="">Unassigned</option>
@@ -347,6 +503,8 @@ export default function CrmPage() {
                           <span>Score {lead.score}/10</span>
                         </div>
                       </article>
+                        );
+                      })()
                     ))}
                     {!column.leads.length && <div className="rounded-2xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-400">Drop leads here</div>}
                   </div>

@@ -1,8 +1,22 @@
 import { prisma } from "../repositories/prisma.js";
 import { notFound } from "../utils/httpError.js";
+import {
+  getOutreachAutomationSettings,
+  getSendUsage,
+  saveOutreachAutomationSettings,
+  updateOutreachAutomationSettings
+} from "./automationGuards.service.js";
+import {
+  getAutomationDashboardData,
+  processAutomationFollowUps,
+  processAutomationLeads,
+  syncRepliesAutomation
+} from "./automationWorkflow.service.js";
+import { getAutomationJob as getStoredAutomationJob, listAutomationJobs } from "./automationJobs.service.js";
 import * as scannerService from "./scannerService.js";
 
 const runningSchedules = new Set();
+const backgroundUserRuns = new Map();
 let schedulerTimer = null;
 
 function nextRunDate(frequency, from = new Date()) {
@@ -75,6 +89,20 @@ function scheduleIndustry(schedule) {
   return filters.industryName || filters.industrySlug || schedule.template?.keyword || "Unknown";
 }
 
+function automationWarnings(settings) {
+  const warnings = [];
+  if (settings.mode === "FULL_AUTOMATION") {
+    warnings.push("Full automation will send emails without manual review if safety gates pass.");
+  }
+  if (settings.autoSendInitialEmailsEnabled && settings.requireManualApprovalBeforeInitialSend === false) {
+    warnings.push("Initial auto-send is enabled. Check Gmail connection, send limits, and quality gates.");
+  }
+  if (settings.autoSendFollowUpsEnabled && settings.requireManualApprovalBeforeFollowUpSend === false) {
+    warnings.push("Follow-up auto-send is enabled. Replied, bounced, and do-not-contact leads will still be skipped.");
+  }
+  return warnings;
+}
+
 async function userSchedules(userId) {
   return prisma.automationSchedule.findMany({
     where: { createdBy: userId },
@@ -101,6 +129,56 @@ async function notify({ scheduleId, userId, type = "INFO", title, message }) {
   return prisma.automationNotification.create({
     data: { scheduleId, createdBy: userId, type, title, message }
   });
+}
+
+function shouldRunBackground(kind, settings, lastRun) {
+  if (settings.automationPaused) return false;
+  const now = Date.now();
+  if (kind === "lead_processing") {
+    if (!(settings.autoAnalyzeLeadsEnabled || settings.autoAnalyzeServicesEnabled || settings.autoRunPipelineEnabled || settings.autoGenerateReportsEnabled || settings.autoGenerateEmailsEnabled || settings.autoSendInitialEmailsEnabled)) {
+      return false;
+    }
+    return !lastRun || now - lastRun >= 15 * 60 * 1000;
+  }
+  if (kind === "reply_sync") {
+    if (!settings.autoSyncRepliesEnabled) return false;
+    return !lastRun || now - lastRun >= 5 * 60 * 1000;
+  }
+  if (kind === "follow_ups") {
+    if (!(settings.autoGenerateFollowUpsEnabled || settings.autoSendFollowUpsEnabled)) return false;
+    return !lastRun || now - lastRun >= 30 * 60 * 1000;
+  }
+  return false;
+}
+
+async function processBackgroundAutomation() {
+  const users = await prisma.user.findMany({ select: { id: true } });
+  for (const user of users) {
+    const state = backgroundUserRuns.get(user.id) || {};
+    if (state.running) continue;
+    state.running = true;
+    backgroundUserRuns.set(user.id, state);
+    try {
+      const settings = await getOutreachAutomationSettings();
+      if (shouldRunBackground("lead_processing", settings, state.leadProcessingAt)) {
+        await processAutomationLeads(user.id, {});
+        state.leadProcessingAt = Date.now();
+      }
+      if (shouldRunBackground("reply_sync", settings, state.replySyncAt)) {
+        await syncRepliesAutomation(user.id);
+        state.replySyncAt = Date.now();
+      }
+      if (shouldRunBackground("follow_ups", settings, state.followUpsAt)) {
+        await processAutomationFollowUps(user.id);
+        state.followUpsAt = Date.now();
+      }
+    } catch (error) {
+      console.error("Background outreach automation failed:", error.message || error);
+    } finally {
+      state.running = false;
+      backgroundUserRuns.set(user.id, state);
+    }
+  }
 }
 
 async function scheduleWithTemplate(id) {
@@ -296,6 +374,32 @@ export async function getDashboard(userId) {
   const failed = jobs.filter((job) => job.status === "FAILED").length;
   const runtimes = jobs.map(runtimeMinutes).filter((value) => value != null);
   const todayResults = todayJobs.flatMap((job) => job.results || []);
+  const [settings, sendUsage, needsActionCount, followUpsDueCount, repliedCount, bouncedCount, doNotContactCount, workflowMetrics] = await Promise.all([
+    getOutreachAutomationSettings(),
+    getSendUsage(userId),
+    prisma.lead.count({ where: { needsAction: true } }),
+    prisma.lead.count({
+      where: {
+        nextFollowUpAt: { lte: new Date() },
+        followUpStatus: { in: ["SCHEDULED", "FOLLOW_UP_1_SENT"] },
+        repliedAt: null,
+        doNotContact: false,
+        bouncedAt: null
+      }
+    }),
+    prisma.lead.count({
+      where: {
+        OR: [{ repliedAt: { not: null } }, { emailStatus: "REPLIED" }, { pipelineStage: "REPLIED" }]
+      }
+    }),
+    prisma.lead.count({
+      where: {
+        OR: [{ bouncedAt: { not: null } }, { emailStatus: "BOUNCED" }, { pipelineStage: "BOUNCED" }]
+      }
+    }),
+    prisma.lead.count({ where: { doNotContact: true } }),
+    getAutomationDashboardData(userId)
+  ]);
 
   return {
     activeSchedules: schedules.filter((schedule) => schedule.enabled).length,
@@ -303,6 +407,28 @@ export async function getDashboard(userId) {
     successRate: completed + failed ? Math.round((completed / (completed + failed)) * 100) : 0,
     avgRuntime: runtimes.length ? Math.round((runtimes.reduce((sum, value) => sum + value, 0) / runtimes.length) * 10) / 10 : 0,
     leadsGeneratedToday: todayResults.filter((result) => result.imported).length,
+    automationMode: settings.mode,
+    automationPaused: settings.automationPaused,
+    automationPausedReason: settings.automationPausedReason,
+    sendWindow: {
+      start: settings.sendWindowStart,
+      end: settings.sendWindowEnd,
+      timezone: settings.sendTimezone
+    },
+    sendUsage,
+    needsActionCount,
+    followUpsDueCount,
+    repliedCount,
+    bouncedCount,
+    doNotContactCount,
+    reportsGenerated: workflowMetrics.reportsGenerated,
+    reportsApproved: workflowMetrics.reportsApproved,
+    emailsGenerated: workflowMetrics.emailsGenerated,
+    emailsSent: workflowMetrics.emailsSent,
+    interestedReplies: workflowMetrics.interestedReplies,
+    followUpsSent: workflowMetrics.followUpsSent,
+    failedLeads: workflowMetrics.failedLeads,
+    warnings: automationWarnings(settings),
     notificationTypes: [
       "Hot lead found",
       "Scan failed",
@@ -358,10 +484,142 @@ export async function listNotifications(userId) {
 }
 
 export async function markNotificationRead(id, userId) {
+  void userId;
   return prisma.automationNotification.update({
     where: { id },
     data: { read: true }
   });
+}
+
+function formatAutomationJob(run) {
+  return {
+    id: run.id,
+    type: run.scheduleId ? "scanner_import" : "full_automation_run",
+    status: run.completedAt ? "completed" : "running",
+    total: run.totalItems || 0,
+    completed: run.completedItems || 0,
+    skipped: 0,
+    failed: run.failedItems || 0,
+    currentLeadId: null,
+    currentLeadName: null,
+    stage: run.currentStage || "Queued",
+    progressPercent: run.progressPercent || 0,
+    currentUrl: run.currentUrl || null,
+    startedAt: run.startedAt,
+    completedAt: run.completedAt,
+    scheduleId: run.scheduleId,
+    scheduleName: run.schedule?.name || null,
+    scanJobId: run.scanJobId || null,
+    logs: Array.isArray(run.logs) ? run.logs.slice(-8) : [],
+    errors: []
+  };
+}
+
+export async function getAutomationSettings(userId) {
+  const [settings, sendUsage] = await Promise.all([
+    getOutreachAutomationSettings(),
+    getSendUsage(userId)
+  ]);
+  return {
+    ...settings,
+    sendUsage,
+    warnings: automationWarnings(settings)
+  };
+}
+
+export async function updateAutomationSettings(input, userId) {
+  const settings = await updateOutreachAutomationSettings(input, userId);
+  await notify({
+    userId,
+    type: "SUCCESS",
+    title: "Automation settings updated",
+    message: `Automation mode is now ${settings.mode.replaceAll("_", " ").toLowerCase()}.`
+  });
+  return getAutomationSettings(userId);
+}
+
+export async function pauseGlobalAutomation(userId, reason = "") {
+  const settings = await updateOutreachAutomationSettings({
+    automationPaused: true,
+    automationPausedReason: String(reason || "").trim(),
+    automationPausedAt: new Date().toISOString()
+  }, userId);
+  await notify({
+    userId,
+    type: "INFO",
+    title: "Automation paused",
+    message: settings.automationPausedReason || "Global automation pause is enabled."
+  });
+  return getAutomationSettings(userId);
+}
+
+export async function resumeGlobalAutomation(userId) {
+  await updateOutreachAutomationSettings({
+    automationPaused: false,
+    automationPausedReason: "",
+    automationPausedAt: null
+  }, userId);
+  await notify({
+    userId,
+    type: "SUCCESS",
+    title: "Automation resumed",
+    message: "Global automation pause has been removed."
+  });
+  return getAutomationSettings(userId);
+}
+
+export async function runAutomationNow(userId) {
+  const settings = await getOutreachAutomationSettings();
+  const schedules = await prisma.automationSchedule.findMany({
+    where: { createdBy: userId, enabled: true },
+    orderBy: { nextRunAt: "asc" },
+    take: settings.batchSize
+  });
+  const result = { totalSchedules: schedules.length, queued: 0, failed: 0, errors: [] };
+  for (const schedule of schedules) {
+    try {
+      await runSchedule(schedule.id, userId, "manual");
+      result.queued += 1;
+    } catch (error) {
+      result.failed += 1;
+      result.errors.push({ scheduleId: schedule.id, scheduleName: schedule.name, reason: error.message });
+    }
+  }
+  await notify({
+    userId,
+    type: result.failed ? "ERROR" : "SUCCESS",
+    title: "Automation run requested",
+    message: result.failed
+      ? `Queued ${result.queued} schedule(s) with ${result.failed} failure(s).`
+      : `Queued ${result.queued} automation schedule(s).`
+  });
+  return result;
+}
+
+export async function getAutomationJobs(userId) {
+  const [runs, storedJobs] = await Promise.all([
+    prisma.automationRun.findMany({
+      where: { schedule: { createdBy: userId } },
+      include: { schedule: true },
+      orderBy: { createdAt: "desc" },
+      take: 25
+    }),
+    listAutomationJobs()
+  ]);
+  return [...storedJobs, ...runs.map(formatAutomationJob)]
+    .sort((left, right) => new Date(right.startedAt || right.createdAt || 0) - new Date(left.startedAt || left.createdAt || 0))
+    .slice(0, 25);
+}
+
+export async function getAutomationJob(id, userId) {
+  const stored = await getStoredAutomationJob(id);
+  if (stored) return stored;
+  const run = await prisma.automationRun.findFirst({
+    where: { id, schedule: { createdBy: userId } },
+    include: { schedule: true }
+  });
+  if (!run) throw notFound("Automation job not found");
+  return formatAutomationJob(run);
 }
 
 export async function processDueSchedules() {
@@ -383,8 +641,10 @@ export function startAutomationScheduler() {
   if (schedulerTimer || process.env.AUTOMATION_SCHEDULER_DISABLED === "true") return;
   schedulerTimer = setInterval(() => {
     processDueSchedules().catch(() => {});
+    processBackgroundAutomation().catch(() => {});
   }, Number(process.env.AUTOMATION_POLL_INTERVAL_MS || 60000));
   processDueSchedules().catch(() => {});
+  processBackgroundAutomation().catch(() => {});
 }
 
 export function stopAutomationScheduler() {

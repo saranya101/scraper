@@ -13,7 +13,12 @@ const providers = {
     tokenUrl: "https://oauth2.googleapis.com/token",
     userInfoUrl: "https://www.googleapis.com/oauth2/v2/userinfo",
     sendUrl: "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
-    scopes: ["openid", "email", "https://www.googleapis.com/auth/gmail.send"],
+    scopes: [
+      "openid",
+      "email",
+      "https://www.googleapis.com/auth/gmail.send",
+      "https://www.googleapis.com/auth/gmail.readonly"
+    ],
     env: {
       clientId: "GOOGLE_CLIENT_ID",
       clientSecret: "GOOGLE_CLIENT_SECRET",
@@ -24,6 +29,10 @@ const providers = {
 
 function activeProvider() {
   return String(process.env.EMAIL_PROVIDER || "GMAIL").toUpperCase();
+}
+
+export function activeEmailProvider() {
+  return activeProvider();
 }
 
 function allowedGoogleEmail() {
@@ -158,6 +167,10 @@ async function refreshAccessToken(account) {
 async function accessToken(account) {
   if (!account.expiresAt || account.expiresAt.getTime() > Date.now() + 60_000) return decrypt(account.accessTokenEncrypted);
   return refreshAccessToken(account);
+}
+
+export async function gmailAccessToken(account) {
+  return accessToken(account);
 }
 
 async function connectedEmail(provider, tokenResponse) {
@@ -323,13 +336,14 @@ function textToEmailHtml(body = "") {
   ].join("");
 }
 
-function makeGmailMessage({ from, toEmail, subject, text, html, attachments = [] }) {
+function makeGmailMessage({ from, toEmail, subject, text, html, attachments = [], headers = [] }) {
   const mixedBoundary = `ocia_mixed_${crypto.randomBytes(12).toString("hex")}`;
   const altBoundary = `ocia_alt_${crypto.randomBytes(12).toString("hex")}`;
   const message = [
     `From: ${from}`,
     `To: ${toEmail}`,
     `Subject: ${subject}`,
+    ...headers.filter(Boolean),
     "MIME-Version: 1.0",
     `Content-Type: multipart/mixed; boundary="${mixedBoundary}"`,
     "",
@@ -388,6 +402,68 @@ export async function getCooldownDays() {
   return cooldownDays();
 }
 
+function websiteDomain(url = "") {
+  try {
+    return new URL(String(url || "")).hostname.replace(/^www\./, "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+async function ensureNoDuplicateOutreach({ lead, leadId, toEmail, eventType = "OUTBOUND", ignoreCooldown = false, allowDuplicate = false, testOnly = false }) {
+  if (allowDuplicate || testOnly) return;
+  if (lead.doNotContact) throw new HttpError(409, "Duplicate outreach blocked: lead is marked do not contact.");
+  if (lead.bouncedAt || lead.emailStatus === "BOUNCED" || lead.pipelineStage === "BOUNCED") {
+    throw new HttpError(409, "Duplicate outreach blocked: this lead previously bounced.");
+  }
+  if (eventType === "FOLLOW_UP_1" || eventType === "FOLLOW_UP_2") {
+    const existingFollowUp = await prisma.emailSend.findFirst({
+      where: { leadId, status: "SENT", eventType }
+    });
+    if (existingFollowUp) throw new HttpError(409, `Duplicate outreach blocked: ${eventType === "FOLLOW_UP_1" ? "follow-up 1" : "follow-up 2"} was already sent.`);
+    return;
+  }
+  if (["SENT", "REPLIED", "BOUNCED"].includes(String(lead.emailStatus || "").toUpperCase())) {
+    throw new HttpError(409, "Duplicate outreach blocked: this lead has already been contacted.");
+  }
+  const existingLeadSend = await prisma.emailSend.findFirst({
+    where: { leadId, status: "SENT", eventType: "OUTBOUND" }
+  });
+  if (existingLeadSend) throw new HttpError(409, "Duplicate outreach blocked: this lead already has an initial outreach email.");
+  const cooldown = await cooldownDays();
+  const cutoff = new Date(Date.now() - cooldown * 24 * 60 * 60 * 1000);
+  const existingRecipientSend = await prisma.emailSend.findFirst({
+    where: {
+      status: "SENT",
+      eventType: "OUTBOUND",
+      toEmail: { equals: toEmail, mode: "insensitive" },
+      sentAt: ignoreCooldown ? undefined : { gte: cutoff }
+    }
+  });
+  if (existingRecipientSend) {
+    throw new HttpError(409, "Duplicate outreach blocked: same recipient was already contacted recently.");
+  }
+  const domain = websiteDomain(lead.website);
+  if (!domain) return;
+  const domainLead = await prisma.lead.findFirst({
+    where: {
+      id: { not: leadId },
+      website: { contains: domain, mode: "insensitive" },
+      emailSends: {
+        some: {
+          status: "SENT",
+          eventType: "OUTBOUND",
+          ...(ignoreCooldown ? {} : { sentAt: { gte: cutoff } })
+        }
+      }
+    },
+    select: { id: true, company: true }
+  });
+  if (domainLead) {
+    throw new HttpError(409, `Duplicate outreach blocked: ${domainLead.company} on the same domain was already contacted recently.`);
+  }
+}
+
 async function gmailAccount() {
   const account = await prisma.emailAccount.findFirst({
     where: { provider: "GOOGLE", email: allowedGoogleEmail() },
@@ -397,20 +473,39 @@ async function gmailAccount() {
   return account;
 }
 
-async function providerSend({ account, toEmail, subject, body, attachments = [] }) {
+export async function getActiveGmailAccount() {
+  if (activeProvider() !== "GMAIL") throw new HttpError(409, "Gmail is not the active email provider");
+  return gmailAccount();
+}
+
+export function gmailSenderEmail() {
+  return allowedGoogleEmail();
+}
+
+async function providerSend({ account, toEmail, subject, body, attachments = [], gmailThreadId = null }) {
   const text = normalizeWhitespace(body);
   const html = textToEmailHtml(text);
   if (activeProvider() === "GMAIL") {
     const cfg = config("GOOGLE");
-    await axios.post(
+    const { data } = await axios.post(
       cfg.sendUrl,
-      { raw: makeGmailMessage({ from: account.email, toEmail, subject, text, html, attachments }) },
+      { raw: makeGmailMessage({ from: account.email, toEmail, subject, text, html, attachments }), ...(gmailThreadId ? { threadId: gmailThreadId } : {}) },
       { headers: { Authorization: `Bearer ${await accessToken(account)}` }, timeout: 30000 }
     );
-    return { provider: "GMAIL", senderEmail: account.email };
+    return {
+      provider: "GMAIL",
+      senderEmail: account.email,
+      gmailMessageId: data?.id || null,
+      gmailThreadId: data?.threadId || null
+    };
   }
   await resendService.sendEmail({ to: toEmail, subject, html, text });
-  return { provider: "RESEND", senderEmail: resendService.senderDetails().email };
+  return {
+    provider: "RESEND",
+    senderEmail: resendService.senderDetails().email,
+    gmailMessageId: null,
+    gmailThreadId: null
+  };
 }
 
 async function resolveReportAttachment(userId, input = {}) {
@@ -471,11 +566,20 @@ export async function sendEmail(userId, input = {}) {
   if (!lead) throw notFound("Lead not found");
   if (!user) throw notFound("User not found");
   if (input.outreachDraftId && (!draft || draft.leadId !== leadId)) throw notFound("Outreach draft not found");
+  await ensureNoDuplicateOutreach({
+    lead,
+    leadId,
+    toEmail,
+    eventType: input.eventType || "OUTBOUND",
+    ignoreCooldown: input.ignoreCooldown,
+    allowDuplicate: input.allowDuplicate,
+    testOnly: input.testOnly
+  });
   const scanEvidence = lead.scanEvidence && typeof lead.scanEvidence === "object" && !Array.isArray(lead.scanEvidence) ? lead.scanEvidence : {};
   const pipelineState = scanEvidence.outreachPipeline && typeof scanEvidence.outreachPipeline === "object" ? scanEvidence.outreachPipeline : {};
   const qualityGate = pipelineState.qualityGate && typeof pipelineState.qualityGate === "object" ? pipelineState.qualityGate : null;
   const selectedReportServices = Array.isArray(pipelineState.selectedReportServices) ? pipelineState.selectedReportServices : [];
-  if (!qualityGate?.approved) throw new HttpError(422, "Email quality gate has not been approved for this lead.");
+  if (!input.skipPipelineQualityGate && !qualityGate?.approved) throw new HttpError(422, "Email quality gate has not been approved for this lead.");
   if (Array.isArray(input.emailSelectedServices) && input.emailSelectedServices.length && selectedReportServices.length && !sameServiceSelection(input.emailSelectedServices, selectedReportServices)) {
     throw new HttpError(422, "Email does not match the selected report services. Regenerate email before sending.");
   }
@@ -506,24 +610,44 @@ export async function sendEmail(userId, input = {}) {
       body,
       provider,
       mode: input.mode || "MANUAL_APPROVAL",
-      status: "PENDING"
+      status: "PENDING",
+      eventType: input.eventType || "OUTBOUND"
     }
   });
 
   try {
-    const delivery = await providerSend({ account, toEmail, subject, body, attachments: attachment ? [attachment] : [] });
+    const delivery = await providerSend({
+      account,
+      toEmail,
+      subject,
+      body,
+      attachments: attachment ? [attachment] : [],
+      gmailThreadId: input.gmailThreadId || null
+    });
     if (attachment?.reportId) await reportService.markReportAttached(attachment.reportId);
+    const sentAt = new Date();
     if (input.testOnly) {
       return prisma.emailSend.update({
         where: { id: sendRecord.id },
-        data: { status: "SENT", mode: input.mode || "MANUAL_APPROVAL", sentAt: new Date() },
+        data: {
+          status: "SENT",
+          mode: input.mode || "MANUAL_APPROVAL",
+          sentAt,
+          gmailMessageId: delivery.gmailMessageId,
+          gmailThreadId: delivery.gmailThreadId
+        },
         include: { emailAccount: { select: { id: true, provider: true, email: true } } }
       });
     }
     const sent = await prisma.$transaction(async (tx) => {
       const updatedSend = await tx.emailSend.update({
         where: { id: sendRecord.id },
-        data: { status: "SENT", sentAt: new Date() },
+        data: {
+          status: "SENT",
+          sentAt,
+          gmailMessageId: delivery.gmailMessageId,
+          gmailThreadId: delivery.gmailThreadId
+        },
         include: {
           emailAccount: { select: { id: true, provider: true, email: true } }
         }
@@ -532,30 +656,52 @@ export async function sendEmail(userId, input = {}) {
         await tx.outreachDraft.update({ where: { id: input.outreachDraftId }, data: { status: "SENT" } });
       }
       const current = await tx.lead.findUnique({ where: { id: leadId } });
-      await tx.lead.update({
-        where: { id: leadId },
-        data: {
+      const leadUpdate = {
+        lastContactedAt: sentAt,
+        lastEmailSentAt: sentAt,
+        gmailMessageId: delivery.gmailMessageId,
+        gmailThreadId: delivery.gmailThreadId,
+        outreachEmail: body
+      };
+      if ((input.eventType || "OUTBOUND") === "OUTBOUND") {
+        Object.assign(leadUpdate, {
           pipelineStage: "SENT",
           status: "CONTACTED",
-          emailStatus: "SENT",
-          lastContactedAt: new Date(),
-          lastEmailSentAt: new Date(),
-          outreachEmail: body
-        }
+          emailStatus: "SENT"
+        });
+      }
+      await tx.lead.update({
+        where: { id: leadId },
+        data: leadUpdate
       });
-      await tx.leadStatusHistory.create({
+      if ((input.eventType || "OUTBOUND") === "OUTBOUND") {
+        await tx.leadStatusHistory.create({
+          data: {
+            leadId,
+            userId,
+            oldStatus: current.status,
+            newStatus: "CONTACTED",
+            oldStage: current.pipelineStage,
+            newStage: "SENT"
+          }
+        });
+      }
+      await tx.leadNote.create({
         data: {
           leadId,
           userId,
-          oldStatus: current.status,
-          newStatus: "CONTACTED",
-          oldStage: current.pipelineStage,
-          newStage: "SENT"
+          note: `${input.eventType === "FOLLOW_UP_1" ? "Sent follow-up 1" : input.eventType === "FOLLOW_UP_2" ? "Sent follow-up 2" : "Sent email"} to ${toEmail} from ${delivery.senderEmail} via ${delivery.provider}.`
         }
       });
-      await tx.leadNote.create({ data: { leadId, userId, note: `Sent email to ${toEmail} from ${delivery.senderEmail} via ${delivery.provider}.` } });
       return updatedSend;
     });
+    if (!input.testOnly && (input.eventType || "OUTBOUND") === "OUTBOUND") {
+      const { scheduleInitialFollowUp } = await import("./followUpService.js");
+      await prisma.$transaction(async (tx) => {
+        const currentLead = await tx.lead.findUnique({ where: { id: leadId } });
+        if (currentLead) await scheduleInitialFollowUp(tx, currentLead, sentAt);
+      });
+    }
     if (attachment?.reportId) await reportService.markReportSent(attachment.reportId);
     return sent;
   } catch (error) {
@@ -575,7 +721,7 @@ export async function history(leadId, userId) {
   if (!lead) throw notFound("Lead not found");
   const sends = await prisma.emailSend.findMany({
     where: { leadId },
-    orderBy: { createdAt: "desc" },
+    orderBy: [{ receivedAt: "desc" }, { sentAt: "desc" }, { createdAt: "desc" }],
     include: {
       user: { select: { id: true, name: true, email: true } },
       emailAccount: { select: { id: true, provider: true, email: true } },

@@ -2,14 +2,14 @@ import { MailCheck, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Badge } from "../components/ui/Badge.jsx";
 import { Button } from "../components/ui/Button.jsx";
-import { Input } from "../components/ui/Input.jsx";
+import { Input, Select } from "../components/ui/Input.jsx";
 import { useToast } from "../hooks/useToast.jsx";
 import { api } from "../services/api.js";
 
 export default function EmailSettingsPage() {
   const { push } = useToast();
   const [accounts, setAccounts] = useState([]);
-  const [emailSending, setEmailSending] = useState({ dailySendLimit: 25, cooldownDays: 14 });
+  const [emailSending, setEmailSending] = useState({ dailySendLimit: 25, cooldownDays: 14, followUpMode: "MANUAL_APPROVAL" });
   const [loading, setLoading] = useState(true);
 
   async function load() {
@@ -20,7 +20,7 @@ export default function EmailSettingsPage() {
         api.get("/settings")
       ]);
       setAccounts(accountsRes.data);
-      setEmailSending(settingsRes.data.emailSending || { dailySendLimit: 25, cooldownDays: 14 });
+      setEmailSending(settingsRes.data.emailSending || { dailySendLimit: 25, cooldownDays: 14, followUpMode: "MANUAL_APPROVAL" });
     } catch (error) {
       push(error.response?.data?.message || "Could not load email settings", "error");
     } finally {
@@ -107,6 +107,13 @@ export default function EmailSettingsPage() {
           <label className="mt-3 block">
             <span className="mb-1.5 block text-sm font-medium">Lead cooldown days</span>
             <Input type="number" min="1" max="90" value={emailSending.cooldownDays || 14} onChange={(e) => setEmailSending({ ...emailSending, cooldownDays: e.target.value })} />
+          </label>
+          <label className="mt-3 block">
+            <span className="mb-1.5 block text-sm font-medium">Follow-up mode</span>
+            <Select value={emailSending.followUpMode || "MANUAL_APPROVAL"} onChange={(e) => setEmailSending({ ...emailSending, followUpMode: e.target.value })}>
+              <option value="MANUAL_APPROVAL">Manual approval required</option>
+              <option value="AUTO_SEND">Auto-send due follow-ups</option>
+            </Select>
           </label>
           <Button className="mt-4" variant="secondary" onClick={saveLimit}>Save limit</Button>
         </section>

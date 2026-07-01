@@ -1,7 +1,16 @@
 import * as leadService from "../services/leadService.js";
+import * as replyWorkflowService from "../services/replyWorkflowService.js";
 
 export async function list(req, res) {
   res.json(await leadService.listLeads(req.query));
+}
+
+export async function replied(req, res) {
+  res.json(await leadService.listRepliedLeads(req.query));
+}
+
+export async function needsAction(req, res) {
+  res.json(await leadService.listNeedsActionLeads(req.query));
 }
 
 export async function pipeline(req, res) {
@@ -34,6 +43,18 @@ export async function assign(req, res) {
 
 export async function reminder(req, res) {
   res.json(await leadService.setReminder(req.params.id, req.body.reminderDate, req.user.id));
+}
+
+export async function doNotContact(req, res) {
+  res.json(await leadService.markDoNotContact(req.params.id, req.user.id, req.body));
+}
+
+export async function classifyReply(req, res) {
+  res.json(await replyWorkflowService.classifyLeadReply(req.params.id, req.user.id));
+}
+
+export async function generateReplyDraft(req, res) {
+  res.json(await replyWorkflowService.generateReplyDraft(req.params.id, req.user.id));
 }
 
 export async function bulkUpdate(req, res) {

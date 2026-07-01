@@ -22,7 +22,7 @@ const includeLead = {
     take: 5
   },
   emailSends: {
-    orderBy: { createdAt: "desc" },
+    orderBy: [{ receivedAt: "desc" }, { sentAt: "desc" }, { createdAt: "desc" }],
     take: 10
   },
   serviceOpportunities: {
@@ -47,7 +47,7 @@ const industryWorkspaceTerms = {
   custom: ["custom"]
 };
 
-export const pipelineStages = ["NOT_CONTACTED", "DRAFTED", "SENT", "REPLIED", "MEETING", "PROPOSAL", "WON", "LOST"];
+export const pipelineStages = ["NOT_CONTACTED", "DRAFTED", "SENT", "REPLIED", "BOUNCED", "MEETING", "PROPOSAL", "WON", "LOST"];
 
 export function inferIndustrySlug(value = "") {
   const haystack = String(value || "").toLowerCase();
@@ -184,6 +184,38 @@ export async function listLeads(query) {
       ]
     });
   }
+  if (query.emailStatus === "REPLIED") {
+    and.push({
+      OR: [
+        { emailStatus: "REPLIED" },
+        { repliedAt: { not: null } },
+        { pipelineStage: { in: ["REPLIED", "MEETING", "PROPOSAL", "WON", "LOST"] } }
+      ]
+    });
+  } else if (query.emailStatus === "BOUNCED") {
+    and.push({
+      OR: [{ emailStatus: "BOUNCED" }, { bouncedAt: { not: null } }, { pipelineStage: "BOUNCED" }]
+    });
+  } else if (query.emailStatus === "SENT") {
+    and.push({
+      OR: [{ emailStatus: "SENT" }, { lastEmailSentAt: { not: null } }, { pipelineStage: "SENT" }]
+    });
+  } else if (query.emailStatus === "READY_TO_SEND") {
+    and.push({ emailStatus: "READY_TO_SEND" });
+  } else if (query.emailStatus === "REJECTED") {
+    and.push({ emailStatus: "REJECTED" });
+  } else if (query.emailStatus === "NOT_SENT") {
+    and.push({
+      emailStatus: { in: [null, "NOT_SENT"] },
+      repliedAt: null,
+      lastEmailSentAt: null,
+      pipelineStage: { notIn: ["SENT", "REPLIED", "BOUNCED", "MEETING", "PROPOSAL", "WON", "LOST"] }
+    });
+  }
+  if (query.replyType) and.push({ replyClassification: String(query.replyType).toUpperCase() });
+  if (query.actionState === "needs_action") and.push({ needsAction: true });
+  if (query.actionState === "no_action") and.push({ needsAction: false, doNotContact: false });
+  if (query.actionState === "do_not_contact") and.push({ doNotContact: true });
   const where = {
     ...(and.length ? { AND: and } : {}),
     ...(query.priority ? { priority: query.priority } : {}),
@@ -246,6 +278,42 @@ export async function listLeads(query) {
     meta: { page, pageSize, total, totalPages: Math.ceil(total / pageSize) },
     stats
   };
+}
+
+export async function listRepliedLeads(query = {}) {
+  return listLeads({ ...query, emailStatus: "REPLIED" });
+}
+
+export async function listNeedsActionLeads(query = {}) {
+  return listLeads({ ...query, actionState: "needs_action" });
+}
+
+export async function markDoNotContact(id, userId, input = {}) {
+  const lead = await prisma.lead.findUnique({ where: { id } });
+  if (!lead) throw notFound("Lead not found");
+  const reason = String(input.reason || "manual_mark_do_not_contact").trim();
+  const updated = await prisma.lead.update({
+    where: { id },
+    data: {
+      doNotContact: true,
+      doNotContactReason: reason,
+      doNotContactAt: new Date(),
+      needsAction: false,
+      needsActionReason: null,
+      followUpStatus: "STOPPED",
+      followUpStoppedReason: "do_not_contact",
+      nextFollowUpAt: null
+    },
+    include: includeLead
+  });
+  await prisma.leadNote.create({
+    data: {
+      leadId: id,
+      userId,
+      note: `Marked do not contact${reason ? `: ${reason.replaceAll("_", " ")}` : "."}`
+    }
+  });
+  return updated;
 }
 
 export async function getStats(scope = {}) {

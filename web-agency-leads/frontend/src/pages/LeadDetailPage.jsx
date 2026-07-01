@@ -72,6 +72,59 @@ function evidenceBadgeClass(value) {
   return "bg-slate-100 text-slate-700 ring-slate-200";
 }
 
+function gmailReplyUrl(threadId = "", messageId = "") {
+  if (threadId && messageId) return `https://mail.google.com/mail/u/0/#all/${threadId}/${messageId}`;
+  if (threadId) return `https://mail.google.com/mail/u/0/#all/${threadId}`;
+  return "";
+}
+
+function replyBadge(lead) {
+  const type = String(lead?.replyClassification || "");
+  if (!type) return null;
+  const map = {
+    INTERESTED: ["Interested", "bg-emerald-100 text-emerald-800 ring-emerald-200"],
+    MAYBE_LATER: ["Maybe later", "bg-amber-100 text-amber-800 ring-amber-200"],
+    NOT_INTERESTED: ["Not interested", "bg-slate-100 text-slate-700 ring-slate-200"],
+    ASKED_FOR_PRICE: ["Asked for price", "bg-cyan-100 text-cyan-800 ring-cyan-200"],
+    ASKED_FOR_MORE_INFO: ["Asked for more info", "bg-blue-100 text-blue-800 ring-blue-200"],
+    WRONG_CONTACT: ["Wrong contact", "bg-orange-100 text-orange-800 ring-orange-200"],
+    AUTO_REPLY: ["Auto-reply", "bg-violet-100 text-violet-800 ring-violet-200"],
+    OTHER: ["Other reply", "bg-slate-100 text-slate-700 ring-slate-200"]
+  };
+  return map[type] ? { label: map[type][0], className: map[type][1] } : { label: type.toLowerCase().replaceAll("_", " "), className: "bg-slate-100 text-slate-700 ring-slate-200" };
+}
+
+function timelineItems(lead, emailHistory) {
+  const statusChanges = (lead?.statusHistory || []).map((item) => ({
+    id: `status-${item.id}`,
+    at: item.createdAt,
+    title: `${pipelineStages[item.newStage]?.label || statuses[item.newStatus]?.label || "Status updated"}`,
+    detail: `${pipelineStages[item.oldStage]?.label || statuses[item.oldStatus]?.label || "Created"} to ${pipelineStages[item.newStage]?.label || statuses[item.newStatus]?.label}`
+  }));
+  const notes = (lead?.notes || []).map((item) => ({
+    id: `note-${item.id}`,
+    at: item.createdAt,
+    title: item.note,
+    detail: item.user?.name || ""
+  }));
+  const sends = (emailHistory?.sends || []).map((send) => ({
+    id: `send-${send.id}`,
+    at: send.receivedAt || send.sentAt || send.createdAt,
+    title: send.eventType === "REPLY"
+      ? `Reply received from ${send.fromEmail || "unknown sender"}`
+      : send.eventType === "FOLLOW_UP_1"
+        ? "Follow-up 1 sent"
+        : send.eventType === "FOLLOW_UP_2"
+          ? "Follow-up 2 sent"
+          : "Initial email sent",
+    detail: send.subject || ""
+  }));
+  return [...statusChanges, ...notes, ...sends]
+    .filter((item) => item.at)
+    .sort((left, right) => new Date(right.at) - new Date(left.at))
+    .slice(0, 20);
+}
+
 export default function LeadDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -96,6 +149,8 @@ export default function LeadDetailPage() {
   const [reportLoading, setReportLoading] = useState(false);
   const [reportAction, setReportAction] = useState("");
   const [reportServices, setReportServices] = useState(DEFAULT_REPORT_SERVICE_IDS);
+  const [replyDraft, setReplyDraft] = useState("");
+  const [replyDraftLoading, setReplyDraftLoading] = useState(false);
 
   async function loadLead() {
     setLoading(true);
@@ -343,6 +398,35 @@ export default function LeadDetailPage() {
     loadLead();
   }
 
+  async function markDoNotContact() {
+    const reason = prompt("Reason for do-not-contact?", lead.doNotContactReason || "manual_mark_do_not_contact");
+    if (reason == null) return;
+    const { data } = await api.post(`/leads/${id}/do-not-contact`, { reason });
+    setLead(data);
+    push("Lead marked do not contact");
+    await loadEmailHistory();
+  }
+
+  async function classifyReply() {
+    const { data } = await api.post(`/leads/${id}/classify-reply`);
+    await loadLead();
+    push(`Reply classified as ${data.classification.classification.toLowerCase().replaceAll("_", " ")}`);
+  }
+
+  async function generateReplyDraft() {
+    setReplyDraftLoading(true);
+    try {
+      const { data } = await api.post(`/leads/${id}/generate-reply-draft`);
+      setReplyDraft(data.body || "");
+      push("Reply draft generated");
+      await loadLead();
+    } catch (error) {
+      push(error.response?.data?.message || "Could not generate reply draft", "error");
+    } finally {
+      setReplyDraftLoading(false);
+    }
+  }
+
   async function runEvidenceScan(mode) {
     setEvidenceLoading(true);
     try {
@@ -406,6 +490,8 @@ export default function LeadDetailPage() {
     generating: "bg-slate-100 text-slate-700 ring-slate-200"
   };
   const serviceLabelsById = Object.fromEntries(REPORT_SERVICE_OPTIONS.map((service) => [service.id, service.label]));
+  const replyState = replyBadge(lead);
+  const timeline = timelineItems(lead, emailHistory);
 
   return (
     <div className="space-y-6">
@@ -815,6 +901,57 @@ export default function LeadDetailPage() {
           </div>
 
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold">Reply detected</h2>
+                <p className="mt-1 text-sm text-slate-500">Recent reply status for this outreach thread.</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {lead.repliedAt ? <Badge className="bg-emerald-100 text-emerald-800 ring-emerald-200">Replied</Badge> : <Badge className="bg-slate-100 text-slate-700 ring-slate-200">No reply yet</Badge>}
+                <Button variant="secondary" onClick={classifyReply} disabled={!lead.repliedAt}>Classify Reply</Button>
+                <Button variant="secondary" onClick={generateReplyDraft} disabled={!lead.repliedAt || replyDraftLoading}>Generate Reply Draft</Button>
+              </div>
+            </div>
+            {lead.repliedAt ? (
+              <div className="space-y-3 text-sm text-slate-600">
+                <p><span className="font-semibold text-slate-900">Date:</span> {formatDate(lead.repliedAt)}</p>
+                <p><span className="font-semibold text-slate-900">From:</span> {lead.lastReplyFrom || "Unknown sender"}</p>
+                {replyState ? <Badge className={replyState.className}>{replyState.label}</Badge> : null}
+                {lead.needsAction ? <Badge className="bg-amber-100 text-amber-800 ring-amber-200">Needs action</Badge> : null}
+                {lead.suggestedNextAction ? <p><span className="font-semibold text-slate-900">Suggested next action:</span> {lead.suggestedNextAction}</p> : null}
+                <p className="rounded-2xl bg-slate-50 p-4 leading-6">{lead.lastReplySnippet || "No snippet captured."}</p>
+                {lead.gmailThreadId || lead.lastReplyMessageId ? <a href={gmailReplyUrl(lead.gmailThreadId, lead.lastReplyMessageId)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700 hover:text-slate-950"><ArrowUpRight size={16} /> Open replied email</a> : null}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">No reply has been synced for this lead yet.</p>
+            )}
+            {replyDraft ? (
+              <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <p className="text-sm font-semibold text-slate-900">Suggested manual reply</p>
+                  <Button variant="ghost" className="px-2.5" onClick={() => navigator.clipboard.writeText(replyDraft).then(() => push("Reply draft copied"))}><Clipboard size={15} /></Button>
+                </div>
+                <pre className="whitespace-pre-wrap text-sm leading-6 text-slate-700">{replyDraft}</pre>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold">Action state</h2>
+                <p className="mt-1 text-sm text-slate-500">Bounce, do-not-contact, and manual action flags.</p>
+              </div>
+              <Button variant="secondary" onClick={markDoNotContact}>Mark Do Not Contact</Button>
+            </div>
+            <div className="space-y-3 text-sm text-slate-600">
+              {lead.needsAction ? <p className="rounded-2xl bg-amber-50 p-3 text-amber-900">Needs action: {lead.needsActionReason?.replaceAll("_", " ") || "manual follow-up needed"}</p> : <p className="rounded-2xl bg-slate-50 p-3">No manual action currently flagged.</p>}
+              {lead.doNotContact ? <p className="rounded-2xl bg-zinc-100 p-3 text-zinc-800">Do not contact{lead.doNotContactReason ? ` · ${lead.doNotContactReason.replaceAll("_", " ")}` : ""}</p> : null}
+              {lead.bouncedAt ? <p className="rounded-2xl bg-rose-50 p-3 text-rose-800">Bounced on {formatDate(lead.bouncedAt)}{lead.bounceReason ? ` · ${lead.bounceReason}` : ""}</p> : null}
+            </div>
+          </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <h2 className="mb-4 text-lg font-semibold">Notes</h2>
             <form onSubmit={addNote} className="mb-5">
               <Textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Add a private note..." />
@@ -843,6 +980,20 @@ export default function LeadDetailPage() {
                 </div>
               ))}
               {!lead.statusHistory.length && <p className="text-sm text-slate-500">No status changes yet.</p>}
+            </div>
+          </details>
+
+          <details className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm" open>
+            <summary className="flex cursor-pointer items-center gap-2 text-lg font-semibold"><History size={18} /> Timeline</summary>
+            <div className="mt-4 space-y-4">
+              {timeline.map((item) => (
+                <div key={item.id} className="border-l-2 border-slate-200 pl-4">
+                  <p className="text-sm font-medium">{item.title}</p>
+                  {item.detail ? <p className="mt-1 text-sm text-slate-600">{item.detail}</p> : null}
+                  <p className="text-xs text-slate-400">{formatDate(item.at)}</p>
+                </div>
+              ))}
+              {!timeline.length && <p className="text-sm text-slate-500">No timeline activity yet.</p>}
             </div>
           </details>
         </aside>
@@ -981,18 +1132,27 @@ export default function LeadDetailPage() {
                 <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                   <div>
                     <p className="font-semibold">{send.subject}</p>
-                    <p className="mt-1 text-sm text-slate-500">To {send.toEmail} from {send.emailAccount?.email || emailHistory.connectedAccounts?.[0]?.email || "hello@ocia.studio"}</p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      {send.eventType === "REPLY"
+                        ? `From ${send.fromEmail || "unknown sender"} on thread with ${send.toEmail}`
+                        : `${send.eventType === "FOLLOW_UP_1" ? "Follow-up 1" : send.eventType === "FOLLOW_UP_2" ? "Follow-up 2" : "Initial email"} to ${send.toEmail} from ${send.emailAccount?.email || emailHistory.connectedAccounts?.[0]?.email || "hello@ocia.studio"}`}
+                    </p>
                     {send.auditReport && <p className="mt-1 text-xs text-slate-400">Attached report: {send.auditReport.status}</p>}
                   </div>
-                  <Badge className={send.status === "SENT" ? "bg-emerald-100 text-emerald-800 ring-emerald-200" : send.status === "FAILED" ? "bg-rose-100 text-rose-700 ring-rose-200" : "bg-slate-100 text-slate-700 ring-slate-200"}>
-                    {send.status}
+                  <Badge className={send.eventType === "REPLY" ? "bg-emerald-100 text-emerald-800 ring-emerald-200" : send.status === "SENT" ? "bg-emerald-100 text-emerald-800 ring-emerald-200" : send.status === "FAILED" ? "bg-rose-100 text-rose-700 ring-rose-200" : "bg-slate-100 text-slate-700 ring-slate-200"}>
+                    {send.eventType === "REPLY" ? "REPLIED" : send.eventType === "FOLLOW_UP_1" ? "FOLLOW-UP 1" : send.eventType === "FOLLOW_UP_2" ? "FOLLOW-UP 2" : send.status}
                   </Badge>
                 </div>
-                <p className="text-xs text-slate-400">{send.sentAt ? `Sent ${formatDate(send.sentAt)}` : `Created ${formatDate(send.createdAt)}`}</p>
+                <p className="text-xs text-slate-400">
+                  {send.eventType === "REPLY"
+                    ? `Received ${formatDate(send.receivedAt || send.createdAt)}`
+                    : send.sentAt ? `Sent ${formatDate(send.sentAt)}` : `Created ${formatDate(send.createdAt)}`}
+                </p>
+                {send.eventType === "REPLY" && (send.gmailThreadId || send.gmailMessageId) ? <a href={gmailReplyUrl(send.gmailThreadId, send.gmailMessageId)} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-2 text-sm font-semibold text-slate-700 hover:text-slate-950"><ArrowUpRight size={15} /> Open replied email</a> : null}
                 {send.errorMessage && <p className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700">{send.errorMessage}</p>}
                 <details className="mt-3">
-                  <summary className="cursor-pointer text-sm font-semibold text-slate-500">View body</summary>
-                  <pre className="mt-3 whitespace-pre-wrap rounded-xl bg-white p-4 text-sm leading-6 text-slate-700">{send.body}</pre>
+                  <summary className="cursor-pointer text-sm font-semibold text-slate-500">{send.eventType === "REPLY" ? "View snippet" : "View body"}</summary>
+                  <pre className="mt-3 whitespace-pre-wrap rounded-xl bg-white p-4 text-sm leading-6 text-slate-700">{send.eventType === "REPLY" ? (send.snippet || send.body) : send.body}</pre>
                 </details>
               </div>
             ))}

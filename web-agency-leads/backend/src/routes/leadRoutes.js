@@ -8,7 +8,7 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 const router = Router();
 
 const status = z.enum(["NOT_CONTACTED", "CONTACTED", "REPLIED", "CLOSED", "ARCHIVED"]);
-const pipelineStage = z.enum(["NOT_CONTACTED", "DRAFTED", "SENT", "REPLIED", "MEETING", "PROPOSAL", "WON", "LOST"]);
+const pipelineStage = z.enum(["NOT_CONTACTED", "DRAFTED", "SENT", "REPLIED", "BOUNCED", "MEETING", "PROPOSAL", "WON", "LOST"]);
 const priority = z.enum(["HOT", "WARM", "COLD"]);
 const websiteStatus = z.enum([
   "WORKING",
@@ -102,6 +102,8 @@ const leadBody = z.object({
 });
 
 router.get("/", asyncHandler(leadController.list));
+router.get("/replied", asyncHandler(leadController.replied));
+router.get("/needs-action", asyncHandler(leadController.needsAction));
 router.get("/meta/catalog", asyncHandler(leadController.meta));
 router.get("/pipeline", asyncHandler(leadController.pipeline));
 router.put(
@@ -181,6 +183,31 @@ router.post(
       z.object({ params: z.object({ id: z.string().min(1) }), body: z.object({ reminderDate: z.string().datetime().optional().nullable() }) }).parse(value)
   }),
   asyncHandler(leadController.reminder)
+);
+router.post(
+  "/:id/do-not-contact",
+  validate({
+    parse: (value) =>
+      z.object({
+        params: z.object({ id: z.string().min(1) }),
+        body: z.object({ reason: z.string().optional() }).optional().default({})
+      }).parse(value)
+  }),
+  asyncHandler(leadController.doNotContact)
+);
+router.post(
+  "/:id/classify-reply",
+  validate({
+    parse: (value) => z.object({ params: z.object({ id: z.string().min(1) }) }).parse(value)
+  }),
+  asyncHandler(leadController.classifyReply)
+);
+router.post(
+  "/:id/generate-reply-draft",
+  validate({
+    parse: (value) => z.object({ params: z.object({ id: z.string().min(1) }) }).parse(value)
+  }),
+  asyncHandler(leadController.generateReplyDraft)
 );
 router.post("/", validate({ parse: (value) => z.object({ body: leadBody }).parse(value) }), asyncHandler(leadController.create));
 router.put(

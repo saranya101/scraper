@@ -20,7 +20,8 @@ const sendBody = z.object({
   contactFirstName: z.string().optional(),
   companyName: z.string().optional(),
   includeReport: z.boolean().optional(),
-  emailSelectedServices: z.array(z.string()).optional()
+  emailSelectedServices: z.array(z.string()).optional(),
+  allowDuplicate: z.boolean().optional()
 });
 
 const resendTestBody = z.object({
@@ -35,7 +36,8 @@ const resendTestBody = z.object({
   contactFirstName: z.string().optional(),
   companyName: z.string().optional(),
   includeReport: z.boolean().optional(),
-  emailSelectedServices: z.array(z.string()).optional()
+  emailSelectedServices: z.array(z.string()).optional(),
+  allowDuplicate: z.boolean().optional()
 });
 
 router.get("/callback/google", asyncHandler(emailController.callback));

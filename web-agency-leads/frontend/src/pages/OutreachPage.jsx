@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle, ChevronLeft, ChevronRight, Clipboard, FileText, Loader2, Play, RefreshCw, RotateCcw, Send, SkipForward, XCircle } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, CheckCircle, ChevronLeft, ChevronRight, Clipboard, FileText, Loader2, Play, RefreshCw, RotateCcw, Send, SkipForward, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import ReportServiceSelector from "../components/ReportServiceSelector.jsx";
@@ -9,7 +9,7 @@ import { Input, Select, Textarea } from "../components/ui/Input.jsx";
 import { useAuth } from "../hooks/useAuth.jsx";
 import { useToast } from "../hooks/useToast.jsx";
 import { api } from "../services/api.js";
-import { domain, priorities } from "../utils/format.js";
+import { domain, formatDate, priorities } from "../utils/format.js";
 
 const workflowLabels = {
   NOT_ANALYSED: "Not Analysed",
@@ -40,10 +40,47 @@ const statusFilters = [
   ["NEEDS_REVIEW", "Needs Review"]
 ];
 
-const emailSentFilters = [
-  ["", "All outreach"],
-  ["sent", "Email sent"],
-  ["not_sent", "Not sent"]
+const emailStatusFilters = [
+  ["", "All email states"],
+  ["NOT_SENT", "Email Not Sent"],
+  ["READY_TO_SEND", "Approved"],
+  ["SENT", "Sent"],
+  ["REPLIED", "Replied"],
+  ["BOUNCED", "Bounced"],
+  ["REJECTED", "Failed / rejected"]
+];
+
+const contactEmailFilters = [
+  ["", "All To emails"],
+  ["true", "Has To email"]
+];
+
+const replyTypeFilters = [
+  ["", "All reply types"],
+  ["INTERESTED", "Interested"],
+  ["MAYBE_LATER", "Maybe later"],
+  ["NOT_INTERESTED", "Not interested"],
+  ["ASKED_FOR_PRICE", "Asked for price"],
+  ["ASKED_FOR_MORE_INFO", "Asked for more info"],
+  ["WRONG_CONTACT", "Wrong contact"],
+  ["AUTO_REPLY", "Auto-reply"],
+  ["OTHER", "Other"]
+];
+
+const actionFilters = [
+  ["", "All actions"],
+  ["needs_action", "Needs action"],
+  ["no_action", "No action needed"],
+  ["do_not_contact", "Do not contact"]
+];
+
+const followUpFilters = [
+  ["", "All follow-ups"],
+  ["due", "Follow-up due"],
+  ["scheduled", "Scheduled"],
+  ["completed", "Completed"],
+  ["stopped", "Stopped"],
+  ["failed", "Failed"]
 ];
 
 const defaultTemplate = {
@@ -193,6 +230,56 @@ function selectedServiceLabelsForLead(lead) {
     .filter(Boolean);
 }
 
+function leadEmailStatus(lead) {
+  if (lead?.emailStatus === "BOUNCED" || lead?.bouncedAt || lead?.pipelineStage === "BOUNCED") return "BOUNCED";
+  if (lead?.emailStatus === "REPLIED" || lead?.repliedAt || ["REPLIED", "MEETING", "PROPOSAL", "WON", "LOST"].includes(lead?.pipelineStage)) return "REPLIED";
+  if (lead?.emailStatus === "SENT" || lead?.lastEmailSentAt || lead?.pipelineStage === "SENT") return "SENT";
+  if (lead?.emailStatus === "READY_TO_SEND") return "READY_TO_SEND";
+  if (lead?.emailStatus === "REJECTED") return "REJECTED";
+  return "NOT_SENT";
+}
+
+function replyClassificationBadge(lead) {
+  const type = String(lead?.replyClassification || "");
+  if (!type) return null;
+  const map = {
+    INTERESTED: ["Interested", "bg-emerald-100 text-emerald-800 ring-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-100 dark:ring-emerald-800"],
+    MAYBE_LATER: ["Maybe later", "bg-amber-100 text-amber-800 ring-amber-200 dark:bg-amber-950/60 dark:text-amber-100 dark:ring-amber-800"],
+    NOT_INTERESTED: ["Not interested", "bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700"],
+    ASKED_FOR_PRICE: ["Asked for price", "bg-cyan-100 text-cyan-800 ring-cyan-200 dark:bg-cyan-950/60 dark:text-cyan-100 dark:ring-cyan-800"],
+    ASKED_FOR_MORE_INFO: ["Asked for more info", "bg-blue-100 text-blue-800 ring-blue-200 dark:bg-blue-950/60 dark:text-blue-100 dark:ring-blue-800"],
+    WRONG_CONTACT: ["Wrong contact", "bg-orange-100 text-orange-800 ring-orange-200 dark:bg-orange-950/60 dark:text-orange-100 dark:ring-orange-800"],
+    AUTO_REPLY: ["Auto-reply", "bg-violet-100 text-violet-800 ring-violet-200 dark:bg-violet-950/60 dark:text-violet-100 dark:ring-violet-800"],
+    OTHER: ["Other reply", "bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700"]
+  };
+  const [label, className] = map[type] || [type.toLowerCase().replaceAll("_", " "), "bg-slate-100 text-slate-700 ring-slate-200"];
+  return { label, className };
+}
+
+function gmailReplyUrl(threadId = "", messageId = "") {
+  if (threadId && messageId) return `https://mail.google.com/mail/u/0/#all/${threadId}/${messageId}`;
+  if (threadId) return `https://mail.google.com/mail/u/0/#all/${threadId}`;
+  return "";
+}
+
+function followUpState(lead) {
+  const status = String(lead?.followUpStatus || "NOT_STARTED");
+  const nextAt = lead?.nextFollowUpAt ? new Date(lead.nextFollowUpAt) : null;
+  const isDue = nextAt && nextAt <= new Date() && !["COMPLETED", "STOPPED"].includes(status) && !lead?.repliedAt;
+  if (isDue) {
+    return {
+      label: `Follow-up ${Number(lead?.followUpStep || 0) >= 1 ? "2 due" : "1 due"}`,
+      className: "bg-amber-100 text-amber-800 ring-amber-200 dark:bg-amber-950/60 dark:text-amber-100 dark:ring-amber-800"
+    };
+  }
+  if (status === "SCHEDULED") return { label: "Follow-up scheduled", className: "bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700" };
+  if (status === "FOLLOW_UP_1_SENT") return { label: "Follow-up 1 sent", className: "bg-blue-100 text-blue-800 ring-blue-200 dark:bg-blue-950/60 dark:text-blue-100 dark:ring-blue-800" };
+  if (status === "COMPLETED") return { label: "Follow-up completed", className: "bg-emerald-100 text-emerald-800 ring-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-100 dark:ring-emerald-800" };
+  if (status === "STOPPED") return { label: "Follow-up stopped", className: "bg-emerald-100 text-emerald-800 ring-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-100 dark:ring-emerald-800" };
+  if (status === "FAILED") return { label: "Follow-up failed", className: "bg-rose-100 text-rose-800 ring-rose-200 dark:bg-rose-950/60 dark:text-rose-100 dark:ring-rose-800" };
+  return { label: "No follow-up", className: "bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700" };
+}
+
 function overallLeadBatchStage(progress) {
   if (!progress) return "";
   if (progress.status === "failed") return "Failed";
@@ -255,10 +342,12 @@ export default function OutreachPage() {
   const [selectedIds, setSelectedIds] = useState([]);
   const [selectedLeadId, setSelectedLeadId] = useState("");
   const [pipelineResult, setPipelineResult] = useState(null);
-  const [filters, setFilters] = useState({ search: "", industryId: "", serviceId: "", pipelineWorkflowStatus: "", highConfidence: "", needsReview: "", emailSentState: "" });
+  const [filters, setFilters] = useState({ search: "", industryId: "", serviceId: "", pipelineWorkflowStatus: "", highConfidence: "", needsReview: "", emailStatus: "", hasContactEmail: "", followUpState: "", replyType: "", actionState: "" });
   const [loading, setLoading] = useState(true);
   const [runningLeadId, setRunningLeadId] = useState("");
   const [sending, setSending] = useState(false);
+  const [syncingReplies, setSyncingReplies] = useState(false);
+  const [replySyncProgress, setReplySyncProgress] = useState(null);
   const [singleSendProgress, setSingleSendProgress] = useState(null);
   const [savingDraft, setSavingDraft] = useState(false);
   const [draft, setDraft] = useState({ fromName: "", fromEmail: "", toEmail: "", subject: "", body: "" });
@@ -268,6 +357,9 @@ export default function OutreachPage() {
   const [reportLoading, setReportLoading] = useState(false);
   const [reportAction, setReportAction] = useState("");
   const [reportServices, setReportServices] = useState(DEFAULT_REPORT_SERVICE_IDS);
+  const [replyDraft, setReplyDraft] = useState("");
+  const [replyDraftLoading, setReplyDraftLoading] = useState(false);
+  const [followUpDraftState, setFollowUpDraftState] = useState({ loading: false, saving: false, open: false, draftId: "", subject: "", body: "", type: "" });
   const [batchReportServices, setBatchReportServices] = useState(DEFAULT_REPORT_SERVICE_IDS);
   const [batchOptions, setBatchOptions] = useState({
     analyzeServicesIfMissing: true,
@@ -334,7 +426,11 @@ export default function OutreachPage() {
     if (filters.pipelineWorkflowStatus) next.pipelineWorkflowStatus = filters.pipelineWorkflowStatus;
     if (filters.highConfidence) next.highConfidence = "true";
     if (filters.needsReview) next.needsReview = "true";
-    if (filters.emailSentState) next.emailSentState = filters.emailSentState;
+    if (filters.emailStatus) next.emailStatus = filters.emailStatus;
+    if (filters.hasContactEmail) next.hasContactEmail = filters.hasContactEmail;
+    if (filters.followUpState) next.followUpState = filters.followUpState;
+    if (filters.replyType) next.replyType = filters.replyType;
+    if (filters.actionState) next.actionState = filters.actionState;
     return next;
   }, [filters]);
 
@@ -347,6 +443,7 @@ export default function OutreachPage() {
         .some((value) => String(value).toLowerCase().includes(search))
     );
   }, [leads, filters.search]);
+  const allVisibleSelected = visibleLeads.length > 0 && visibleLeads.every((lead) => selectedIds.includes(lead.id));
 
   async function loadData() {
     setLoading(true);
@@ -375,6 +472,188 @@ export default function OutreachPage() {
       push(error.response?.data?.message || "Could not load outreach pipeline", "error");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function syncReplies() {
+    setSyncingReplies(true);
+    setReplySyncProgress({ percent: 8, label: "Preparing Gmail reply sync..." });
+    const progressTimer = setInterval(() => {
+      setReplySyncProgress((current) => current ? {
+        ...current,
+        percent: Math.min(current.percent >= 75 ? current.percent + 3 : current.percent + 8, 92),
+        label: current.percent < 35 ? "Checking sent outreach..." : current.percent < 70 ? "Scanning recent Gmail messages..." : "Matching replies to leads..."
+      } : current);
+    }, 450);
+    try {
+      const { data } = await api.post("/gmail/sync-replies");
+      await Promise.all([loadData(), selectedLead?.id ? loadReportForLead(selectedLead.id) : Promise.resolve()]);
+      clearInterval(progressTimer);
+      setReplySyncProgress({ percent: 100, label: `Sync complete: ${data.leadsUpdated} leads updated.` });
+      push(`Reply sync complete: ${data.repliesFound} replies found, ${data.leadsUpdated} leads updated.`);
+      setTimeout(() => setReplySyncProgress(null), 1800);
+    } catch (error) {
+      clearInterval(progressTimer);
+      setReplySyncProgress({ percent: 100, label: error.response?.data?.message || "Reply sync failed." });
+      push(error.response?.data?.message || "Reply sync failed. Check Gmail connection and backend logs.", "error");
+      setTimeout(() => setReplySyncProgress(null), 2400);
+    } finally {
+      setSyncingReplies(false);
+    }
+  }
+
+  async function generateDueFollowUps() {
+    setBatch({ total: 1, completed: 0, approved: 0, skipped: 0, failed: 0, running: true, current: "Generating due follow-up drafts..." });
+    try {
+      const { data } = await api.post("/follow-ups/generate-due");
+      await loadData();
+      setBatch({
+        total: data.total || 0,
+        completed: data.total || 0,
+        approved: data.generated || 0,
+        skipped: data.skipped || 0,
+        failed: data.failed || 0,
+        running: false,
+        current: "",
+        skippedReasons: (data.skippedReasons || []).map((item) => `${item.leadName}: ${item.reason}`),
+        failedReasons: (data.failedReasons || []).map((item) => `${item.leadName}: ${item.reason}`)
+      });
+      push(`Generated ${data.generated || 0} due follow-up drafts.`);
+    } catch (error) {
+      setBatch({ total: 1, completed: 1, approved: 0, skipped: 0, failed: 1, running: false, current: "", failedReasons: [error.response?.data?.message || "Could not generate due follow-ups"] });
+      push(error.response?.data?.message || "Could not generate due follow-ups", "error");
+    }
+  }
+
+  async function generateFollowUpDraftsFor(source = "selected") {
+    const targets = source === "all" ? visibleLeads : visibleLeads.filter((lead) => selectedIds.includes(lead.id));
+    if (!targets.length) return push("Select at least one lead", "error");
+    setBatch({ total: 1, completed: 0, approved: 0, skipped: 0, failed: 0, running: true, current: "Generating follow-up drafts..." });
+    try {
+      const { data } = await api.post("/follow-ups/generate-batch", { leadIds: targets.map((lead) => lead.id) });
+      await loadData();
+      setBatch({
+        total: data.total || 0,
+        completed: data.total || 0,
+        approved: data.generated || 0,
+        skipped: data.skipped || 0,
+        failed: data.failed || 0,
+        running: false,
+        current: "",
+        skippedReasons: (data.skippedReasons || []).map((item) => `${item.leadName}: ${item.reason}`),
+        failedReasons: (data.failedReasons || []).map((item) => `${item.leadName}: ${item.reason}`)
+      });
+      push(`Generated ${data.generated || 0} follow-up drafts.`);
+    } catch (error) {
+      setBatch({ total: 1, completed: 1, approved: 0, skipped: 0, failed: 1, running: false, current: "", failedReasons: [error.response?.data?.message || "Could not generate follow-up drafts"] });
+      push(error.response?.data?.message || "Could not generate follow-up drafts", "error");
+    }
+  }
+
+  async function sendDueFollowUps() {
+    if (!gmailReady) return push("Connect Gmail before sending", "error");
+    setBatch({ total: 1, completed: 0, approved: 0, skipped: 0, failed: 0, running: true, current: "Sending due follow-ups...", mode: "sending" });
+    try {
+      const { data } = await api.post("/follow-ups/send-due");
+      await loadData();
+      setBatch({
+        total: data.total || 0,
+        completed: data.total || 0,
+        approved: data.sent || 0,
+        skipped: data.skipped || 0,
+        failed: data.failed || 0,
+        running: false,
+        current: "",
+        mode: "sending",
+        skippedReasons: (data.skippedReasons || []).map((item) => `${item.leadName}: ${item.reason}`),
+        failedReasons: (data.failedReasons || []).map((item) => `${item.leadName}: ${item.reason}`)
+      });
+      push(`Send due follow-ups complete: ${data.sent || 0} sent, ${data.skipped || 0} skipped.`);
+    } catch (error) {
+      setBatch({ total: 1, completed: 1, approved: 0, skipped: 0, failed: 1, running: false, current: "", mode: "sending", failedReasons: [error.response?.data?.message || "Could not send due follow-ups"] });
+      push(error.response?.data?.message || "Could not send due follow-ups", "error");
+    }
+  }
+
+  async function generateSelectedLeadFollowUp() {
+    if (!selectedLead?.id) return push("Select a lead first", "error");
+    setFollowUpDraftState((current) => ({ ...current, loading: true }));
+    try {
+      const { data } = await api.post(`/follow-ups/${selectedLead.id}/generate`);
+      setFollowUpDraftState({
+        loading: false,
+        saving: false,
+        open: true,
+        draftId: data.draft?.id || "",
+        subject: data.draft?.subject || "",
+        body: data.draft?.fullMessage || "",
+        type: data.draft?.type || ""
+      });
+      push(`Generated follow-up ${data.step} draft`);
+      await loadData();
+    } catch (error) {
+      setFollowUpDraftState((current) => ({ ...current, loading: false }));
+      push(error.response?.data?.message || "Could not generate follow-up draft", "error");
+    }
+  }
+
+  async function sendSelectedLeadFollowUp({ overrideDue = false } = {}) {
+    if (!selectedLead?.id) return push("Select a lead first", "error");
+    if (!gmailReady) return push("Connect Gmail before sending", "error");
+    try {
+      const { data } = await api.post(`/follow-ups/${selectedLead.id}/send`, { overrideDue });
+      push(`Follow-up ${data.step} sent`);
+      await loadData();
+    } catch (error) {
+      push(error.response?.data?.message || "Could not send follow-up", "error");
+    }
+  }
+
+  async function sendSelectedLeadFollowUpNow() {
+    if (!selectedLead?.id) return push("Select a lead first", "error");
+    if (!window.confirm("Send this follow-up now even if it is not due yet?")) return;
+    await sendSelectedLeadFollowUp({ overrideDue: true });
+  }
+
+  async function saveFollowUpDraftEdit() {
+    if (!followUpDraftState.draftId) return;
+    setFollowUpDraftState((current) => ({ ...current, saving: true }));
+    try {
+      await api.put(`/outreach/${followUpDraftState.draftId}`, {
+        subject: followUpDraftState.subject,
+        fullMessage: followUpDraftState.body
+      });
+      push("Follow-up draft saved");
+      await loadData();
+    } catch (error) {
+      push(error.response?.data?.message || "Could not save follow-up draft", "error");
+    } finally {
+      setFollowUpDraftState((current) => ({ ...current, saving: false }));
+    }
+  }
+
+  async function classifySelectedReply() {
+    if (!selectedLead?.id) return push("Select a lead first", "error");
+    try {
+      const { data } = await api.post(`/leads/${selectedLead.id}/classify-reply`);
+      push(`Reply classified as ${data.classification.classification.toLowerCase().replaceAll("_", " ")}`);
+      await loadData();
+    } catch (error) {
+      push(error.response?.data?.message || "Could not classify reply", "error");
+    }
+  }
+
+  async function generateSelectedReplyDraft() {
+    if (!selectedLead?.id) return push("Select a lead first", "error");
+    setReplyDraftLoading(true);
+    try {
+      const { data } = await api.post(`/leads/${selectedLead.id}/generate-reply-draft`);
+      setReplyDraft(data.body || "");
+      push("Reply draft generated");
+    } catch (error) {
+      push(error.response?.data?.message || "Could not generate reply draft", "error");
+    } finally {
+      setReplyDraftLoading(false);
     }
   }
 
@@ -408,6 +687,7 @@ export default function OutreachPage() {
   useEffect(() => {
     if (!selectedLead) return;
     setPipelineResult(resultFromLead(selectedLead));
+    setFollowUpDraftState({ loading: false, saving: false, open: false, draftId: "", subject: "", body: "", type: "" });
     const state = pipelineState(selectedLead);
     const savedDraft = state?.editedDraft;
     const sourceEmail = state?.result?.email || state?.email || {};
@@ -759,6 +1039,39 @@ export default function OutreachPage() {
         push(data.errorMessage || "Email send failed", "error");
       }
     } catch (error) {
+      if (error.response?.status === 409 && /Duplicate outreach blocked:/i.test(error.response?.data?.message || "")) {
+        const confirmed = window.confirm(`${error.response.data.message}\n\nSend anyway for this lead?`);
+        if (confirmed) {
+          try {
+            const { data } = await api.post("/email/send", {
+              leadId: selectedLead.id,
+              toEmail: draft.toEmail,
+              subject: draft.subject,
+              body: finalBody,
+              includeReport,
+              emailSelectedServices: reportServices,
+              fromName: draft.fromName,
+              fromEmail: draft.fromEmail,
+              senderTitle: activeSender.title,
+              senderCompany: activeSender.company,
+              contactFirstName: firstName(selectedLead),
+              companyName: selectedLead.company,
+              allowDuplicate: true
+            });
+            if (data.status === "SENT") {
+              push("Email sent with duplicate override");
+              await loadData();
+              await loadReportForLead(selectedLead.id);
+              setSingleSendProgress({ running: false, label: "Email sent", percent: 100, error: false });
+              return;
+            }
+          } catch (overrideError) {
+            setSingleSendProgress({ running: false, label: overrideError.response?.data?.message || "Email send failed", percent: 100, error: true });
+            push(overrideError.response?.data?.message || "Email send failed", "error");
+            return;
+          }
+        }
+      }
       setSingleSendProgress({ running: false, label: error.response?.data?.message || "Email send failed", percent: 100, error: true });
       push(error.response?.data?.message || "Email send failed", "error");
     } finally {
@@ -1037,6 +1350,15 @@ export default function OutreachPage() {
     setSelectedIds((current) => current.includes(leadId) ? current.filter((id) => id !== leadId) : [...current, leadId]);
   }
 
+  function toggleSelectVisibleLeads() {
+    const visibleIds = visibleLeads.map((lead) => lead.id);
+    setSelectedIds((current) => (
+      allVisibleSelected
+        ? current.filter((id) => !visibleIds.includes(id))
+        : [...new Set([...current, ...visibleIds])]
+    ));
+  }
+
   async function generateReportForSelected(mode = "generate") {
     if (!selectedLead) return push("Select a lead first", "error");
     if (!reportServices.length) return push("Please select at least one service to include in the report.", "error");
@@ -1193,6 +1515,9 @@ export default function OutreachPage() {
         </div>
         <div className="flex flex-wrap gap-2">
           <Button disabled={!selectedLead || Boolean(runningLeadId)} onClick={() => runPipeline()}><Play size={16} /> {runningLeadId === selectedLead?.id ? "Analysing..." : "Analyze"}</Button>
+          <Button variant="secondary" disabled={syncingReplies} onClick={syncReplies}><RefreshCw size={16} /> {syncingReplies ? "Syncing replies..." : "Sync Replies"}</Button>
+          <Button variant="secondary" onClick={generateDueFollowUps}><FileText size={16} /> Generate due follow-ups</Button>
+          <Button variant="secondary" disabled={!gmailReady} onClick={sendDueFollowUps}><Send size={16} /> Send due follow-ups</Button>
           <Button variant="secondary" disabled={!selectedLead || Boolean(runningLeadId)} onClick={() => selectedLead && analyzeServicesForLead(selectedLead)}><RefreshCw size={16} /> Analyze services</Button>
           <Button variant="secondary" disabled={!selectedLead} onClick={() => resetLeads("current")}><RotateCcw size={16} /> Reset Current</Button>
           {user?.role === "ADMIN" && <Button variant="danger" onClick={() => setDeleteAllOpen(true)}><AlertTriangle size={16} /> Delete All Leads</Button>}
@@ -1221,6 +1546,18 @@ export default function OutreachPage() {
         </div>
       )}
 
+      {replySyncProgress ? (
+        <div className={`${card} p-4`}>
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-medium text-slate-700 dark:text-slate-200">{replySyncProgress.label}</p>
+            <span className={`text-xs font-semibold ${textMuted}`}>{replySyncProgress.percent}%</span>
+          </div>
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+            <div className="h-full bg-slate-950 transition-all duration-300 dark:bg-white" style={{ width: `${replySyncProgress.percent}%` }} />
+          </div>
+        </div>
+      ) : null}
+
       <div className="grid gap-5 xl:grid-cols-[320px_minmax(390px,0.9fr)_minmax(520px,1.05fr)]">
         <aside className={`${card} p-4 xl:sticky xl:top-24 xl:self-start`}>
           <div className="mb-4">
@@ -1238,9 +1575,24 @@ export default function OutreachPage() {
                 {catalog.industries.map((industry) => <option key={industry.id} value={industry.id}>{industry.name}</option>)}
               </Select>
             </div>
-            <Select value={filters.emailSentState} onChange={(event) => setFilters({ ...filters, emailSentState: event.target.value })}>
-              {emailSentFilters.map(([value, label]) => <option key={value || "all"} value={value}>{label}</option>)}
+            <Select value={filters.emailStatus} onChange={(event) => setFilters({ ...filters, emailStatus: event.target.value })}>
+              {emailStatusFilters.map(([value, label]) => <option key={value || "all"} value={value}>{label}</option>)}
             </Select>
+            <Select value={filters.hasContactEmail} onChange={(event) => setFilters({ ...filters, hasContactEmail: event.target.value })}>
+              {contactEmailFilters.map(([value, label]) => <option key={value || "all"} value={value}>{label}</option>)}
+            </Select>
+            <Select value={filters.followUpState} onChange={(event) => setFilters({ ...filters, followUpState: event.target.value })}>
+              {followUpFilters.map(([value, label]) => <option key={value || "all"} value={value}>{label}</option>)}
+            </Select>
+            <Select value={filters.replyType} onChange={(event) => setFilters({ ...filters, replyType: event.target.value })}>
+              {replyTypeFilters.map(([value, label]) => <option key={value || "all"} value={value}>{label}</option>)}
+            </Select>
+            <Select value={filters.actionState} onChange={(event) => setFilters({ ...filters, actionState: event.target.value })}>
+              {actionFilters.map(([value, label]) => <option key={value || "all"} value={value}>{label}</option>)}
+            </Select>
+            <Button variant="secondary" disabled={!visibleLeads.length || batch?.running || sending} onClick={toggleSelectVisibleLeads}>
+              {allVisibleSelected ? "Clear filtered selection" : "Select all filtered leads"}
+            </Button>
             <div className="grid grid-cols-2 gap-2">
               <Button variant="secondary" disabled={!selectedIds.length || batch?.running || sending} onClick={() => runBatch("selected")}>Run selected</Button>
               <Button variant="secondary" disabled={!visibleLeads.length || batch?.running || sending} onClick={() => runBatch("all")}>Run all</Button>
@@ -1252,6 +1604,10 @@ export default function OutreachPage() {
             <div className="grid grid-cols-2 gap-2">
               <Button variant="secondary" disabled={!selectedIds.length || batch?.running || sending} onClick={bulkApproveReports}>Approve selected reports</Button>
               <Button variant="secondary" disabled={!selectedIds.length || batch?.running || sending} onClick={sendSelectedEmails}>Send selected emails</Button>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="secondary" disabled={!selectedIds.length || batch?.running} onClick={() => generateFollowUpDraftsFor("selected")}>Generate selected follow-ups</Button>
+              <Button variant="secondary" disabled={!visibleLeads.length || batch?.running} onClick={() => generateFollowUpDraftsFor("all")}>Generate filtered follow-ups</Button>
             </div>
             <details className="rounded-2xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/60">
               <summary className="cursor-pointer text-sm font-semibold">Batch workflow options</summary>
@@ -1276,7 +1632,9 @@ export default function OutreachPage() {
               const topServices = selectedServiceLabelsForLead(lead).slice(0, 3);
               const progressState = batchLeadProgress[lead.id];
               const progressLabel = overallLeadBatchStage(progressState);
-              const emailSent = Boolean(lead.lastEmailSentAt || lead.pipelineStage === "SENT");
+              const emailState = leadEmailStatus(lead);
+              const followUp = followUpState(lead);
+              const replyBadge = replyClassificationBadge(lead);
               return (
                 <div ref={(node) => { if (node) leadRefs.current[lead.id] = node; }} key={lead.id} className={`rounded-2xl border p-3 transition ${selectedLead?.id === lead.id ? "border-slate-950 bg-slate-50 dark:border-white dark:bg-slate-800/80" : "border-slate-200 bg-white hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:hover:bg-slate-800"}`}>
                   <div className="flex gap-3">
@@ -1304,15 +1662,47 @@ export default function OutreachPage() {
                         <Badge className={lead.serviceAnalysisStatus === "completed" ? "bg-emerald-100 text-emerald-800 ring-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-100 dark:ring-emerald-800" : lead.serviceAnalysisStatus === "failed" ? "bg-rose-100 text-rose-800 ring-rose-200 dark:bg-rose-950/60 dark:text-rose-100 dark:ring-rose-800" : "bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700"}>
                           Services: {lead.serviceAnalysisStatus || "not_started"}
                         </Badge>
-                        <Badge className={emailSent ? "bg-emerald-100 text-emerald-800 ring-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-100 dark:ring-emerald-800" : "bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700"}>
-                          Email: {emailSent ? "sent" : "not sent"}
+                        <Badge className={emailState === "REPLIED"
+                          ? "bg-emerald-100 text-emerald-800 ring-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-100 dark:ring-emerald-800"
+                          : emailState === "BOUNCED"
+                            ? "bg-rose-100 text-rose-800 ring-rose-200 dark:bg-rose-950/60 dark:text-rose-100 dark:ring-rose-800"
+                          : emailState === "SENT"
+                            ? "bg-blue-100 text-blue-800 ring-blue-200 dark:bg-blue-950/60 dark:text-blue-100 dark:ring-blue-800"
+                            : emailState === "READY_TO_SEND"
+                              ? "bg-violet-100 text-violet-800 ring-violet-200 dark:bg-violet-950/60 dark:text-violet-100 dark:ring-violet-800"
+                              : emailState === "REJECTED"
+                                ? "bg-rose-100 text-rose-800 ring-rose-200 dark:bg-rose-950/60 dark:text-rose-100 dark:ring-rose-800"
+                                : "bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700"}>
+                          Email: {emailState === "READY_TO_SEND" ? "approved" : emailState.toLowerCase().replaceAll("_", " ")}
                         </Badge>
                         <Badge className={leadReport?.status === "approved" || leadReport?.status === "attached" || leadReport?.status === "sent" ? "bg-emerald-100 text-emerald-800 ring-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-100 dark:ring-emerald-800" : leadReport?.status === "failed" || leadReport?.status === "failed_quality_gate" ? "bg-rose-100 text-rose-800 ring-rose-200 dark:bg-rose-950/60 dark:text-rose-100 dark:ring-rose-800" : "bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700"}>
                           Report: {leadReport?.status || "missing"}
                         </Badge>
+                        <Badge className={followUp.className}>{followUp.label}</Badge>
+                        {replyBadge ? <Badge className={replyBadge.className}>Reply: {replyBadge.label}</Badge> : null}
+                        {lead.needsAction ? <Badge className="bg-amber-100 text-amber-800 ring-amber-200 dark:bg-amber-950/60 dark:text-amber-100 dark:ring-amber-800">Needs action</Badge> : null}
+                        {lead.doNotContact ? <Badge className="bg-zinc-100 text-zinc-700 ring-zinc-200 dark:bg-zinc-900 dark:text-zinc-200 dark:ring-zinc-700">Do not contact</Badge> : null}
                         {progressState?.reportStatus === "running" ? <Badge className="bg-indigo-100 text-indigo-800 ring-indigo-200 dark:bg-indigo-950/60 dark:text-indigo-100 dark:ring-indigo-800">Generating PDF</Badge> : null}
                         {progressState?.emailStatus === "running" ? <Badge className="bg-cyan-100 text-cyan-800 ring-cyan-200 dark:bg-cyan-950/60 dark:text-cyan-100 dark:ring-cyan-800">Generating Email</Badge> : null}
                       </div>
+                      {emailState === "REPLIED" && lead.lastReplySnippet ? (
+                        <div className="mt-3 space-y-2">
+                          <p className="line-clamp-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-sm leading-6 text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-100">
+                            {lead.lastReplySnippet}
+                          </p>
+                          {lead.gmailThreadId || lead.lastReplyMessageId ? (
+                            <a
+                              href={gmailReplyUrl(lead.gmailThreadId, lead.lastReplyMessageId)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-2 text-xs font-semibold text-emerald-700 hover:text-emerald-900 dark:text-emerald-200 dark:hover:text-emerald-100"
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              <ArrowUpRight size={14} /> Open replied email
+                            </a>
+                          ) : null}
+                        </div>
+                      ) : null}
                       {progressState?.status === "failed" && progressState?.error ? <p className="mt-2 text-xs text-rose-600 dark:text-rose-300">{progressState.error}</p> : null}
                     </button>
                   </div>
@@ -1350,10 +1740,62 @@ export default function OutreachPage() {
             <div className="mt-5 flex flex-wrap gap-2">
               <Button disabled={!selectedLead || Boolean(runningLeadId)} onClick={() => runPipeline()}><RefreshCw size={16} /> Run Pipeline Again</Button>
               <Button variant="secondary" disabled={!selectedLead || savingDraft} onClick={overrideApprove}><CheckCircle size={16} /> Override & Approve</Button>
+              <Button variant="secondary" disabled={!selectedLead || followUpDraftState.loading} onClick={generateSelectedLeadFollowUp}><FileText size={16} /> {followUpDraftState.loading ? "Generating..." : "Generate Follow-up Draft"}</Button>
+              <Button variant="secondary" disabled={!selectedLead || !gmailReady} onClick={sendSelectedLeadFollowUp}><Send size={16} /> Send Follow-up</Button>
+              <Button variant="secondary" disabled={!selectedLead || !gmailReady} onClick={sendSelectedLeadFollowUpNow}><Send size={16} /> Send Follow-up Now</Button>
               <Button variant="secondary" disabled={!currentResult} onClick={() => decide("REJECTED")}><XCircle size={16} /> Reject</Button>
               <Button variant="secondary" disabled={!selectedLead} onClick={() => resetLeads("current")}><RotateCcw size={16} /> Reset</Button>
             </div>
           </section>
+
+          <Panel title="Follow-up">
+            {selectedLead ? (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge className={followUpState(selectedLead).className}>{followUpState(selectedLead).label}</Badge>
+                  {selectedLead.nextFollowUpAt ? <span className={`text-sm ${textMuted}`}>Next: {formatDate(selectedLead.nextFollowUpAt)}</span> : null}
+                </div>
+                {selectedLead.followUpStoppedReason ? <p className={`text-sm ${textMuted}`}>Stopped reason: {selectedLead.followUpStoppedReason.replaceAll("_", " ")}</p> : null}
+                {selectedLead.outreachDrafts?.[0]?.type?.startsWith?.("FOLLOW_UP") ? (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{selectedLead.outreachDrafts[0].type.replaceAll("_", " ")}</p>
+                    <p className="mt-2 font-semibold">{selectedLead.outreachDrafts[0].subject || "No subject"}</p>
+                    <p className={`mt-2 line-clamp-5 text-sm leading-6 ${textMuted}`}>{selectedLead.outreachDrafts[0].fullMessage}</p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button variant="secondary" onClick={() => setFollowUpDraftState({
+                        loading: false,
+                        saving: false,
+                        open: true,
+                        draftId: selectedLead.outreachDrafts[0].id || "",
+                        subject: selectedLead.outreachDrafts[0].subject || "",
+                        body: selectedLead.outreachDrafts[0].fullMessage || "",
+                        type: selectedLead.outreachDrafts[0].type || ""
+                      })}>Preview & Edit</Button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className={`text-sm ${textMuted}`}>No follow-up draft generated yet for this lead.</p>
+                )}
+                {followUpDraftState.open ? (
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950/60">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{followUpDraftState.type?.replaceAll("_", " ") || "Follow-up draft"}</p>
+                    <label className="mt-3 block">
+                      <span className="mb-1.5 block text-sm font-medium">Subject</span>
+                      <Input value={followUpDraftState.subject} onChange={(event) => setFollowUpDraftState((current) => ({ ...current, subject: event.target.value }))} />
+                    </label>
+                    <label className="mt-3 block">
+                      <span className="mb-1.5 block text-sm font-medium">Body</span>
+                      <Textarea rows={12} value={followUpDraftState.body} onChange={(event) => setFollowUpDraftState((current) => ({ ...current, body: event.target.value }))} />
+                    </label>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button variant="secondary" disabled={followUpDraftState.saving} onClick={saveFollowUpDraftEdit}>{followUpDraftState.saving ? "Saving..." : "Save draft edits"}</Button>
+                      <Button variant="ghost" onClick={() => setFollowUpDraftState({ loading: false, saving: false, open: false, draftId: "", subject: "", body: "", type: "" })}>Close preview</Button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : <p className={`text-sm ${textMuted}`}>Select a lead to manage follow-ups.</p>}
+          </Panel>
 
           <Panel title="Business summary">
             <p className={`text-sm leading-6 ${textMuted}`}>{currentResult?.debug?.businessSummary || selectedLead?.scanEvidence?.businessUnderstanding?.summary || "Run the pipeline to capture the business context used for outreach."}</p>
@@ -1397,6 +1839,28 @@ export default function OutreachPage() {
                 ) : null}
               </div>
             ) : <p className={`text-sm ${textMuted}`}>Quality Gate has not run for this lead yet.</p>}
+          </Panel>
+
+          <Panel title="Reply detected">
+            {selectedLead?.repliedAt ? (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge className="bg-emerald-100 text-emerald-800 ring-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-100 dark:ring-emerald-800">Replied</Badge>
+                  <span className={`text-sm ${textMuted}`}>{formatDate(selectedLead.repliedAt)}</span>
+                  {selectedLead.replyClassification ? <Badge className="bg-blue-100 text-blue-800 ring-blue-200 dark:bg-blue-950/60 dark:text-blue-100 dark:ring-blue-800">{selectedLead.replyClassification.toLowerCase().replaceAll("_", " ")}</Badge> : null}
+                  {selectedLead.needsAction ? <Badge className="bg-amber-100 text-amber-800 ring-amber-200 dark:bg-amber-950/60 dark:text-amber-100 dark:ring-amber-800">Needs action</Badge> : null}
+                </div>
+                <p className={`text-sm leading-6 ${textMuted}`}><span className="font-semibold text-slate-900 dark:text-slate-100">From:</span> {selectedLead.lastReplyFrom || "Unknown sender"}</p>
+                <p className={`rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6 dark:border-slate-800 dark:bg-slate-950/60 ${textMuted}`}>{selectedLead.lastReplySnippet || "No snippet captured."}</p>
+                {selectedLead.suggestedNextAction ? <p className={`text-sm leading-6 ${textMuted}`}><span className="font-semibold text-slate-900 dark:text-slate-100">Suggested next step:</span> {selectedLead.suggestedNextAction}</p> : null}
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="secondary" onClick={classifySelectedReply}><RefreshCw size={16} /> Classify Reply</Button>
+                  <Button variant="secondary" onClick={generateSelectedReplyDraft} disabled={replyDraftLoading}><FileText size={16} /> Generate Reply Draft</Button>
+                </div>
+                {replyDraft ? <pre className={`whitespace-pre-wrap rounded-2xl border border-slate-200 bg-white p-4 text-sm leading-6 dark:border-slate-800 dark:bg-slate-950/60 ${textMuted}`}>{replyDraft}</pre> : null}
+                {selectedLead.gmailThreadId || selectedLead.lastReplyMessageId ? <a href={gmailReplyUrl(selectedLead.gmailThreadId, selectedLead.lastReplyMessageId)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700 hover:text-slate-950 dark:text-slate-200 dark:hover:text-white"><ArrowUpRight size={15} /> Open replied email</a> : null}
+              </div>
+            ) : <p className={`text-sm ${textMuted}`}>No reply has been synced for this lead yet.</p>}
           </Panel>
 
           <Panel title="Report">

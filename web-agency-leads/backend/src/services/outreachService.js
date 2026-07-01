@@ -1953,15 +1953,49 @@ export async function deleteDraft(id) {
 }
 
 export async function getQueue(query = {}) {
+  const now = new Date();
   const where = {
     ...(query.industryId ? { industryId: query.industryId } : {}),
     ...(query.industry && !query.industryId ? { industry: { contains: query.industry, mode: "insensitive" } } : {}),
     ...(query.serviceId ? { serviceOpportunities: { some: { serviceId: query.serviceId, recommended: true } } } : {}),
+    ...(query.hasContactEmail === "true"
+      ? { OR: [{ ownerEmail: { not: null } }, { generalEmail: { not: null } }] }
+      : {}),
+    ...(query.emailStatus === "REPLIED"
+      ? { OR: [{ emailStatus: "REPLIED" }, { repliedAt: { not: null } }, { pipelineStage: { in: ["REPLIED", "MEETING", "PROPOSAL", "WON", "LOST"] } }] }
+      : {}),
+    ...(query.emailStatus === "BOUNCED"
+      ? { OR: [{ emailStatus: "BOUNCED" }, { bouncedAt: { not: null } }, { pipelineStage: "BOUNCED" }] }
+      : {}),
+    ...(query.emailStatus === "SENT"
+      ? { OR: [{ emailStatus: "SENT" }, { lastEmailSentAt: { not: null } }, { pipelineStage: "SENT" }] }
+      : {}),
+    ...(query.emailStatus === "READY_TO_SEND"
+      ? { emailStatus: "READY_TO_SEND" }
+      : {}),
+    ...(query.emailStatus === "REJECTED"
+      ? { emailStatus: "REJECTED" }
+      : {}),
+    ...(query.emailStatus === "NOT_SENT"
+      ? { emailStatus: { in: [null, "NOT_SENT"] }, repliedAt: null, lastEmailSentAt: null, pipelineStage: { notIn: ["SENT", "REPLIED", "BOUNCED", "MEETING", "PROPOSAL", "WON", "LOST"] } }
+      : {}),
     ...(query.emailSentState === "sent"
       ? { OR: [{ lastEmailSentAt: { not: null } }, { pipelineStage: "SENT" }] }
       : {}),
     ...(query.emailSentState === "not_sent"
       ? { lastEmailSentAt: null, pipelineStage: { not: "SENT" } }
+      : {}),
+    ...(query.replyType
+      ? { replyClassification: String(query.replyType).toUpperCase() }
+      : {}),
+    ...(query.actionState === "needs_action"
+      ? { needsAction: true }
+      : {}),
+    ...(query.actionState === "no_action"
+      ? { needsAction: false, doNotContact: false }
+      : {}),
+    ...(query.actionState === "do_not_contact"
+      ? { doNotContact: true }
       : {})
   };
   const leads = await prisma.lead.findMany({
@@ -2020,6 +2054,21 @@ export async function getQueue(query = {}) {
   }
   if (query.needsReview === "true") {
     return rows.filter((lead) => ["NEEDS_REVIEW", "APPROVED"].includes(lead.pipelineWorkflowStatus));
+  }
+  if (query.followUpState === "due") {
+    return rows.filter((lead) => lead.nextFollowUpAt && new Date(lead.nextFollowUpAt) <= now && !lead.repliedAt && !["REPLIED", "STOPPED", "COMPLETED"].includes(lead.followUpStatus));
+  }
+  if (query.followUpState === "scheduled") {
+    return rows.filter((lead) => ["SCHEDULED", "FOLLOW_UP_1_SENT"].includes(lead.followUpStatus) && (!lead.nextFollowUpAt || new Date(lead.nextFollowUpAt) > now));
+  }
+  if (query.followUpState === "completed") {
+    return rows.filter((lead) => lead.followUpStatus === "COMPLETED");
+  }
+  if (query.followUpState === "stopped") {
+    return rows.filter((lead) => lead.followUpStatus === "STOPPED");
+  }
+  if (query.followUpState === "failed") {
+    return rows.filter((lead) => lead.followUpStatus === "FAILED");
   }
   return rows;
 }

@@ -30,6 +30,7 @@ enum PipelineStage {
   DRAFTED
   SENT
   REPLIED
+  BOUNCED
   MEETING
   PROPOSAL
   WON
@@ -117,6 +118,36 @@ enum EmailSendMode {
   AUTO_SEND
 }
 
+enum EmailSendEventType {
+  OUTBOUND
+  FOLLOW_UP_1
+  FOLLOW_UP_2
+  REPLY
+}
+
+enum FollowUpStatus {
+  NOT_STARTED
+  SCHEDULED
+  FOLLOW_UP_1_DUE
+  FOLLOW_UP_1_SENT
+  FOLLOW_UP_2_DUE
+  FOLLOW_UP_2_SENT
+  COMPLETED
+  STOPPED
+  FAILED
+}
+
+enum ReplyClassification {
+  INTERESTED
+  MAYBE_LATER
+  NOT_INTERESTED
+  ASKED_FOR_PRICE
+  ASKED_FOR_MORE_INFO
+  WRONG_CONTACT
+  AUTO_REPLY
+  OTHER
+}
+
 enum EmailBulkJobStatus {
   PENDING
   RUNNING
@@ -193,6 +224,27 @@ model Lead {
   emailStatus       String?
   lastContactedAt   DateTime?
   lastEmailSentAt   DateTime?
+  repliedAt         DateTime?
+  lastReplySnippet  String?             @db.Text
+  lastReplyFrom     String?
+  lastReplyMessageId String?
+  replyClassification ReplyClassification?
+  replyClassificationConfidence Float?
+  suggestedNextAction String?
+  needsAction      Boolean             @default(false)
+  needsActionReason String?
+  doNotContact     Boolean             @default(false)
+  doNotContactReason String?
+  doNotContactAt   DateTime?
+  bouncedAt        DateTime?
+  bounceReason     String?             @db.Text
+  gmailMessageId    String?
+  gmailThreadId     String?
+  followUpStatus    FollowUpStatus      @default(NOT_STARTED)
+  followUpStep      Int                 @default(0)
+  nextFollowUpAt    DateTime?
+  lastFollowUpSentAt DateTime?
+  followUpStoppedReason String?
   estimatedProjectValue String?
   priority       LeadPriority        @default(COLD)
   outreachEmail  String?             @db.Text
@@ -253,6 +305,14 @@ model Lead {
   @@index([emailStatus])
   @@index([lastContactedAt])
   @@index([lastEmailSentAt])
+  @@index([repliedAt])
+  @@index([gmailThreadId])
+  @@index([replyClassification])
+  @@index([needsAction])
+  @@index([doNotContact])
+  @@index([bouncedAt])
+  @@index([followUpStatus])
+  @@index([nextFollowUpAt])
   @@index([priority])
   @@index([websiteStatus])
   @@index([cms])
@@ -431,7 +491,13 @@ model EmailSend {
   provider        String          @default("GMAIL")
   mode            EmailSendMode   @default(MANUAL_APPROVAL)
   status          EmailSendStatus @default(PENDING)
+  eventType       EmailSendEventType @default(OUTBOUND)
   sentAt          DateTime?
+  receivedAt      DateTime?
+  fromEmail       String?
+  snippet         String?         @db.Text
+  gmailMessageId  String?         @unique
+  gmailThreadId   String?
   errorMessage    String?         @db.Text
   createdAt       DateTime        @default(now())
 
@@ -440,6 +506,9 @@ model EmailSend {
   @@index([emailAccountId])
   @@index([auditReportId])
   @@index([status])
+  @@index([eventType])
+  @@index([gmailThreadId])
+  @@index([receivedAt])
   @@map("email_sends")
 }
 

@@ -9,6 +9,8 @@ function recipientEmail(lead) {
 
 function emailStatus(lead) {
   if (lead.emailStatus) return lead.emailStatus;
+  if (lead.bouncedAt || lead.pipelineStage === "BOUNCED") return "BOUNCED";
+  if (lead.repliedAt || lead.pipelineStage === "REPLIED" || lead.status === "REPLIED") return "REPLIED";
   if (lead.lastEmailSentAt) return "SENT";
   if (lead.status === "CONTACTED" || lead.pipelineStage === "SENT") return "CONTACTED";
   return "NOT_SENT";

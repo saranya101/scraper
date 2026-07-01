@@ -1,5 +1,6 @@
 import { prisma } from "../repositories/prisma.js";
 import { HttpError, notFound } from "../utils/httpError.js";
+import { outreachAutomationDefaults, normalizeAutomationSettings } from "./automationGuards.service.js";
 import { ensureDefaultCatalog } from "./catalogService.js";
 
 const settingDefaults = {
@@ -27,7 +28,8 @@ const settingDefaults = {
   },
   emailSending: {
     dailySendLimit: 25,
-    cooldownDays: 14
+    cooldownDays: 14,
+    followUpMode: "MANUAL_APPROVAL"
   },
   outreachPersona: {
     enabled: false,
@@ -44,6 +46,7 @@ const settingDefaults = {
     showDebug: false,
     qualityGateStrictness: "standard"
   },
+  outreachAutomation: outreachAutomationDefaults,
   outreachEmailTemplate: {
     greetingTemplate: 'Hi {{contact.firstName || "there"}},',
     openingLineTemplate: "",
@@ -118,7 +121,7 @@ async function costSummary(costTracking) {
 
 export async function getSettings(userId) {
   await ensureDefaultCatalog();
-  const [users, industries, services, apiKeys, costTracking, darkMode, notifications, emailSending, outreachPersona, outreachPipeline, outreachEmailTemplate] = await Promise.all([
+  const [users, industries, services, apiKeys, costTracking, darkMode, notifications, emailSending, outreachPersona, outreachPipeline, outreachAutomation, outreachEmailTemplate] = await Promise.all([
     prisma.user.findMany({
       select: {
         id: true,
@@ -144,6 +147,7 @@ export async function getSettings(userId) {
     setting("emailSending"),
     setting("outreachPersona"),
     setting("outreachPipeline"),
+    setting("outreachAutomation"),
     setting("outreachEmailTemplate")
   ]);
 
@@ -158,6 +162,7 @@ export async function getSettings(userId) {
     emailSending,
     outreachPersona,
     outreachPipeline,
+    outreachAutomation: normalizeAutomationSettings(outreachAutomation),
     outreachEmailTemplate,
     industries,
     services
@@ -195,7 +200,7 @@ export async function updateProfile(userId, input = {}) {
 }
 
 export async function updateAppSettings(userId, input = {}) {
-  const keys = ["apiKeys", "costTracking", "darkMode", "notifications", "emailSending", "outreachPersona", "outreachPipeline", "outreachEmailTemplate"];
+  const keys = ["apiKeys", "costTracking", "darkMode", "notifications", "emailSending", "outreachPersona", "outreachPipeline", "outreachAutomation", "outreachEmailTemplate"];
   for (const key of keys) {
     if (input[key] !== undefined) {
       const current = await setting(key);
@@ -204,7 +209,8 @@ export async function updateAppSettings(userId, input = {}) {
         if (incoming.googlePlacesKey === "Saved") delete incoming.googlePlacesKey;
         if (incoming.openaiKey === "Saved") delete incoming.openaiKey;
       }
-      await upsertSetting(key, { ...current, ...incoming }, userId);
+      const merged = { ...current, ...incoming };
+      await upsertSetting(key, key === "outreachAutomation" ? normalizeAutomationSettings(merged) : merged, userId);
     }
   }
   return getSettings(userId);
